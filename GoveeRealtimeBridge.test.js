@@ -10,9 +10,10 @@ const RETRY_INTERVAL = 30000;
 
 export default class GoveeRealtimeBridge
 {
-    constructor(owner)
+    constructor(owner, host)
     {
         this.owner = owner;
+        this.host = host;
         this.enabled = false;
         this.phase = 'idle';
         this.sequence = 0;
@@ -27,18 +28,71 @@ export default class GoveeRealtimeBridge
         this.startupComplete = false;
         this.startupStarted = undefined;
         this.startupPowerRequested = false;
+        this.counters = {colorRequests: 0, readyReplies: 0, failures: 0, retries: 0};
+        this.lastError = '';
+        this.alertId = undefined;
+        this.lastStatusTime = -Infinity;
+        this.lastStatusPhase = undefined;
+    }
+
+    supported()
+    {
+        return this.owner.sku === 'H6008' && this.owner.type === 3;
     }
 
     eligible()
     {
-        return this.owner.sku === 'H6008' && this.owner.type === 3 &&
+        return this.supported() &&
             typeof this.owner.id === 'string' && this.owner.id.length > 0 &&
             !!this.owner.udpServer;
     }
 
     setEnabled(value)
     {
-        this.enabled = value === true || value === 'true';
+        const enabled = value === true || value === 'true';
+        if (enabled !== this.enabled)
+        {
+            if (!enabled) this.clearFailure();
+            else if (this.phase === 'cooldown') this.phase = 'idle';
+        }
+        this.enabled = enabled;
+    }
+
+    clearFailure()
+    {
+        this.lastError = '';
+        if (this.alertId !== undefined && this.host && typeof this.host.denotify === 'function')
+            this.host.denotify(this.alertId);
+        this.alertId = undefined;
+    }
+
+    reportFailure(reason)
+    {
+        this.counters.failures++;
+        this.lastError = String(reason).slice(0, 160);
+        const message = 'H6008 BLE bridge: ' + this.lastError + '; holding color, LAN color fallback disabled';
+        if (this.host) this.host.log(message, {toFile: true});
+        else this.owner.log(message);
+        if (this.alertId === undefined && this.host && typeof this.host.notify === 'function')
+            this.alertId = this.host.notify('H6008 BLE transport unavailable',
+                'Colors are paused to avoid LAN fading. Check the local BLE bridge; automatic retry every 30 seconds. Disable H6008 BLE realtime bridge to use LAN colors.', 1);
+    }
+
+    publishStatus(now)
+    {
+        if (!this.host || !this.supported()) return;
+        const phase = this.enabled ? this.phase : (this.phase === 'releasing' ? 'releasing' : 'LAN');
+        const changed = phase !== this.lastStatusPhase;
+        if (!changed && now - this.lastStatusTime < 1000) return;
+        const counts = 'requests=' + this.counters.colorRequests + ', readyReplies=' + this.counters.readyReplies +
+            ', failures=' + this.counters.failures + ', retries=' + this.counters.retries;
+        if (changed) this.host.log('H6008 transport=' + phase + ', ' + counts, {toFile: true});
+        if (typeof this.host.addMessage === 'function')
+            this.host.addMessage('h6008-ble-transport', 'H6008 transport: ' + phase + ' | ' + counts,
+                (this.lastError ? this.lastError + '. ' : '') +
+                'Counts are local bridge requests/replies, not measured BLE or optical FPS. LAN colors remain blocked while BLE realtime is enabled.');
+        this.lastStatusTime = now;
+        this.lastStatusPhase = phase;
     }
 
     ownsTransport()
@@ -52,8 +106,10 @@ export default class GoveeRealtimeBridge
         this.requests[id] = {op, time: now};
         for (const key of Object.keys(this.requests))
             if (now - this.requests[key].time > ACQUIRE_TIMEOUT) delete this.requests[key];
-        this.owner.udpServer.write(Object.assign({id, op}, body), BRIDGE_ADDRESS, BRIDGE_PORT);
+        try { this.owner.udpServer.write(Object.assign({id, op}, body), BRIDGE_ADDRESS, BRIDGE_PORT); }
+        catch (_) { delete this.requests[id]; return null; }
         this.lastSend = now;
+        if (op === 'colors') this.counters.colorRequests++;
         return id;
     }
 
@@ -79,8 +135,9 @@ export default class GoveeRealtimeBridge
 
     fail(now, reason)
     {
-        this.owner.log('H6008 BLE bridge: ' + reason + '; releasing before LAN fallback');
-        this.release(now, false);
+        this.reportFailure(reason);
+        if (this.ownsTransport()) this.release(now, false);
+        else this.finishRelease(now);
     }
 
     prepareStartup(now)
@@ -109,17 +166,24 @@ export default class GoveeRealtimeBridge
         }
         if (now - this.startupStarted >= REPLY_TIMEOUT)
         {
-            this.owner.log('H6008 BLE bridge: LAN startup status timeout; keeping LAN transport');
+            this.reportFailure('LAN startup status timeout');
             this.startupStarted = undefined;
             this.finishRelease(now); // No BLE request was sent, so no release is needed.
         }
         return false;
     }
 
-    // true means the bridge is acquiring/streaming/releasing and LAN must wait.
+    // While opted in, true also covers outages: never silently resume fading LAN colors.
     render(color, now)
     {
-        const wanted = this.enabled && this.eligible();
+        const handled = this.renderFrame(color, now);
+        this.publishStatus(now);
+        return handled;
+    }
+
+    renderFrame(color, now)
+    {
+        const wanted = this.enabled && this.supported();
         if (!wanted && this.ownsTransport()) this.release(now, false);
 
         if (this.phase === 'releasing')
@@ -132,14 +196,24 @@ export default class GoveeRealtimeBridge
         if (!wanted) return false;
         if (this.phase === 'cooldown')
         {
-            if (now < this.retryAt) return false;
+            if (now < this.retryAt) return true;
+            this.counters.retries++;
             this.phase = 'idle';
         }
+        if (!this.eligible())
+        {
+            this.fail(now, 'device ID or local UDP socket unavailable');
+            return true;
+        }
         if (!Array.isArray(color) || color.length !== 3 ||
-            color.some(value => !Number.isInteger(value) || value < 0 || value > 255)) return false;
+            color.some(value => !Number.isInteger(value) || value < 0 || value > 255))
+        {
+            this.fail(now, 'invalid RGB frame');
+            return true;
+        }
 
         if (this.phase === 'idle' && !this.prepareStartup(now))
-            return this.phase !== 'cooldown';
+            return true;
 
         if (this.phase === 'idle')
         {
@@ -160,13 +234,21 @@ export default class GoveeRealtimeBridge
         const serialized = JSON.stringify(color);
         if (now - this.lastColorTime >= COLOR_INTERVAL && serialized !== this.lastColor)
         {
-            this.send('colors', {colors: [{device: this.owner.id, rgb: color.slice(), on: true}]}, now);
+            if (this.send('colors', {colors: [{device: this.owner.id, rgb: color.slice(), on: true}]}, now) === null)
+            {
+                this.fail(now, 'local UDP send failed');
+                return true;
+            }
             this.lastColor = serialized;
             this.lastColorTime = now;
         }
         if (now - this.lastHeartbeat >= HEARTBEAT_INTERVAL)
         {
-            this.send('heartbeat', {devices: [this.owner.id]}, now);
+            if (this.send('heartbeat', {devices: [this.owner.id]}, now) === null)
+            {
+                this.fail(now, 'local UDP send failed');
+                return true;
+            }
             this.lastHeartbeat = now;
         }
         return true;
@@ -202,11 +284,14 @@ export default class GoveeRealtimeBridge
         }
         if (state.ready === true)
         {
+            this.clearFailure();
+            this.counters.readyReplies++;
             this.lastReply = now;
             this.phase = 'streaming';
         }
         else if (state.state === 'paused_off')
         {
+            this.clearFailure();
             // An off bulb must not be turned on by the legacy LAN fallback.
             this.lastReply = now;
             this.phase = 'paused';
@@ -223,7 +308,7 @@ export default class GoveeRealtimeBridge
     shutdown(mode, color, now)
     {
         if (!this.ownsTransport()) return false;
-        // Shutdown policy takes precedence over a fallback release already in flight.
+        // Shutdown policy takes precedence over an outage release already in flight.
         if (mode === 'Release control') this.release(now, true, undefined, true);
         else if (mode === 'Single color') this.release(now, false, color, true);
         else this.release(now, false, undefined, true);

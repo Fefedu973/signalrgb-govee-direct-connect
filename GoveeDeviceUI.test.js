@@ -15,7 +15,7 @@ export default class GoveeDeviceUI
         this.goveeDevice = new GoveeDevice(controller.device);
         this.goveeDevice.setupUdpServer();
         // Construct only in the renderer, after Discovery data crossed the engine boundary.
-        this.goveeDevice.realtimeBridge = new GoveeRealtimeBridge(this.goveeDevice);
+        this.goveeDevice.realtimeBridge = new GoveeRealtimeBridge(this.goveeDevice, device);
 
         // Setup lighting device
         this.ledCount = controller.device.leds;

@@ -14,6 +14,8 @@ The patch uses standard LAN discovery. It does not remove firmware color transit
 
 An optional **H6008 BLE realtime bridge** setting routes H6008 single-color devices through a separately configured local BLE companion. It is **off by default**. Other models and the existing LAN protocols remain unchanged. The companion is required; enabling this option alone does not provide a BLE backend. See [the transport contract and validation notes](H6008-BLE.md).
 
+While enabled, a companion outage holds the last color, shows an alert and retries automatically every 30 seconds. It does not silently resume fading LAN colors. Disable the option explicitly to restore LAN rendering. The device page shows the active transport and local request/reply counters.
+
 ## Getting started
 This SignalRGB Addon allows you to add Govee devices via a direct IP connection. You control the amount of leds of the device and what protocol is used to communicate with the device. You can even use components to build your exact Govee Glide setup.
 

@@ -8,9 +8,11 @@ const id = '00:00:00:00:00:00:00:01';
 let checks = 0;
 function check(name, run) { run(); checks++; console.log('PASS ' + name); }
 function fixture({sku = 'H6008', type = 3, enabled = true, baseline = false} = {}) {
-    const clock = {now: 100000}, writes = [], logs = [], sockets = [];
+    const clock = {now: 100000}, writes = [], logs = [], sockets = [], alerts = [], cleared = [], messages = [];
     const host = {log: value => logs.push(value), error: value => {throw Error(value);}, pause() {},
-        setName(){},setImageFromBase64(){},denotify(){},setSize(){},setControllableLeds(){},addProperty(){},color(){return [12,34,56];}};
+        notify(title,message,priority){const id='alert-'+alerts.length;alerts.push({id,title,message,priority});return id;},
+        denotify(id){cleared.push(id);},addMessage(id,message,tooltip){messages.push({id,message,tooltip});},
+        setName(){},setImageFromBase64(){},setSize(){},setControllableLeds(){},addProperty(){},color(){return [12,34,56];}};
     const context = vm.createContext({
         Date: class extends Date { static now() { return clock.now; } },
         encode: data => Buffer.from(data).toString('base64'), decode: data => [...Buffer.from(data, 'base64')],
@@ -37,7 +39,7 @@ function fixture({sku = 'H6008', type = 3, enabled = true, baseline = false} = {
     if (!baseline) {
         assert.equal(bulb.realtimeBridge,null);
         assert.equal(JSON.parse(JSON.stringify(bulb)).sku,sku);
-        bulb.realtimeBridge=new context.GoveeRealtimeBridge(bulb);
+        bulb.realtimeBridge=new context.GoveeRealtimeBridge(bulb,host);
     }
     bulb.setupUdpServer(); bulb.onOff = 1; bulb.hasReceivedStatus = true; bulb.lastStatus = clock.now; bulb.lastDeviceDataCheck = clock.now;
     if (!baseline) bulb.realtimeBridge.setEnabled(enabled);
@@ -52,7 +54,7 @@ function fixture({sku = 'H6008', type = 3, enabled = true, baseline = false} = {
                 device:id, state:'streaming', ready:true, last_sent_rgb:[12,34,56], error:null, ...state
             }], ...extra})});
     };
-    return {clock, writes, logs, sockets, bulb, ui, render, bridge, lan, reply, context, host};
+    return {clock, writes, logs, sockets, alerts, cleared, messages, bulb, ui, render, bridge, lan, reply, context, host};
 }
 check('Discovery controller crosses JSON boundary before the real renderer creates its BLE owner', () => {
     const s=fixture();
@@ -116,6 +118,8 @@ check('missing startup LAN status is bounded and never starts BLE or forces powe
     s.render(); s.render([1,2,3],2000);
     assert.equal(s.bridge().length,0); assert.equal(s.bulb.realtimeBridge.phase,'cooldown');
     assert(!s.lan().some(w=>w.data.msg.cmd==='turn'));
+    assert(!s.lan().some(w=>w.data.msg.cmd==='colorwc'));
+    s.render([4,5,6],29999); assert(!s.lan().some(w=>w.data.msg.cmd==='colorwc'));
 });
 check('100ms maximum color cadence, changed-color coalescing and 500ms heartbeat', () => {
     const s = fixture(); s.render(); s.reply();
@@ -138,12 +142,12 @@ check('wrong address, wrong ID, wrong port, stale or unknown replies cannot seiz
     s.reply({ready:false,state:'connecting'},request);
     assert.equal(s.bulb.realtimeBridge.phase,'streaming');
 });
-check('missing bridge replies release then fall back after the lease expires', () => {
+check('missing bridge replies release then hold color after the lease expires', () => {
     const s = fixture(); s.render(); s.render([2,3,4],2000);
     assert.equal(s.bridge().at(-1).data.op,'release');
     assert.equal(s.bridge().at(-1).data.restore,false); assert.equal(s.lan().length,0);
     s.render([2,3,4],1999); assert.equal(s.lan().length,0);
-    s.render([2,3,4],1); assert(s.lan().some(w=>w.data.msg.cmd==='colorwc'));
+    s.render([2,3,4],1); assert.equal(s.lan().length,0);
     assert.equal(s.bulb.realtimeBridge.phase,'cooldown');
 });
 check('healthy connecting acknowledgements get a bounded 15s window, never infinite waiting', () => {
@@ -155,11 +159,11 @@ check('healthy connecting acknowledgements get a bounded 15s window, never infin
     s.reply({state:'initializing',ready:false}); s.render([12,34,56],500);
     assert.equal(s.bridge().at(-1).data.op,'release');
 });
-check('explicit bridge errors wait for release acknowledgement before LAN fallback', () => {
+check('explicit bridge errors release and hold color without any LAN fallback', () => {
     const s = fixture(); s.render(); s.reply({state:'failed',ready:false,error:'Synthetic authentication failure'},{...s.bridge()[0]},{ok:false});
     assert.equal(s.bulb.realtimeBridge.phase,'releasing'); assert.equal(s.lan().length,0);
     s.reply({state:'idle',ready:false}); s.render();
-    assert(s.lan().some(w=>w.data.msg.cmd==='colorwc'));
+    assert.equal(s.lan().length,0);
 });
 check('option disabled while streaming releases without restoration and resumes LAN', () => {
     const s = fixture(); s.render(); s.reply(); s.bulb.realtimeBridge.setEnabled(false); s.render();
@@ -183,16 +187,72 @@ check('transient reconnection errors keep a bounded acquisition window', () => {
 check('bridge retry is delayed for 30s after release, then reacquires without LAN', () => {
     const s = fixture(); s.render(); s.reply({state:'failed',ready:false,error:'Synthetic failure'});
     s.reply({state:'idle',ready:false}); s.render();
-    const requestCount=s.bridge().length;
+    const requestCount=s.bridge().length; assert.equal(s.lan().length,0);
     s.render([1,2,3],29999); assert.equal(s.bridge().length,requestCount);
     const before=s.lan().length; s.render([1,2,3],1);
     assert.equal(s.lan().length,before); assert.equal(s.bridge().at(-1).data.op,'colors');
+    assert.equal(s.bulb.realtimeBridge.counters.retries,1);
+    s.reply(); assert.equal(s.bulb.realtimeBridge.phase,'streaming'); assert.equal(s.lan().length,0);
 });
-check('Forced mode uses BLE and resends the LAN color after fallback', () => {
+check('Forced mode uses BLE and resends LAN color only after explicit opt-out', () => {
     const s = fixture(); s.bulb.singleColor([20,30,40],s.clock.now); s.reply();
     assert.equal(s.lan().length,0); s.bulb.realtimeBridge.setEnabled(false);
     s.bulb.singleColor([20,30,40],s.clock.now); s.reply({state:'idle',ready:false});
     s.bulb.singleColor([20,30,40],s.clock.now); assert(s.lan().some(w=>w.data.msg.cmd==='colorwc'));
+});
+check('Forced mode never sends LAN color during repeated bridge outages and retries', () => {
+    const s=fixture();
+    for(let attempt=0;attempt<3;attempt++) {
+        s.bulb.singleColor([20,30,40],s.clock.now);
+        s.clock.now+=2000; s.bulb.singleColor([20,30,40],s.clock.now);
+        s.clock.now+=2000; s.bulb.singleColor([20,30,40],s.clock.now);
+        assert.equal(s.bulb.realtimeBridge.phase,'cooldown');
+        s.clock.now+=30000;
+    }
+    assert.equal(s.lan().length,0); assert.equal(s.alerts.length,1);
+    assert.equal(s.bulb.realtimeBridge.counters.failures,3);
+    assert.equal(s.bulb.realtimeBridge.counters.retries,2);
+});
+check('missing local socket or stable ID cannot turn opted-in H6008 into LAN color mode', () => {
+    for(const missing of ['udpServer','id']) {
+        const s=fixture(); s.bulb[missing]=null;
+        assert.equal(s.bulb.realtimeBridge.render([1,2,3],s.clock.now),true);
+        assert.equal(s.bulb.realtimeBridge.phase,'cooldown');
+        assert.equal(s.writes.length,0); assert.equal(s.alerts.length,1);
+    }
+});
+check('UDP write exceptions remain bounded, hold color and can recover', () => {
+    const s=fixture(), write=s.bulb.udpServer.write;
+    s.bulb.udpServer.write=function(data,address,port) {if(address==='127.0.0.1')throw Error('synthetic UDP failure');write.call(this,data,address,port);};
+    s.render(); assert.equal(s.bulb.realtimeBridge.phase,'releasing');
+    s.render([4,5,6],2000); assert.equal(s.bulb.realtimeBridge.phase,'cooldown');
+    assert.equal(s.lan().length,0); assert.equal(s.alerts.length,1);
+    s.bulb.udpServer.write=write; s.render([7,8,9],30000); s.reply();
+    assert.equal(s.bulb.realtimeBridge.phase,'streaming');
+    assert.deepEqual(s.cleared,[s.alerts[0].id]); assert.equal(s.lan().length,0);
+});
+check('outage alert clears on recovery and opt-out; page counters are throttled', () => {
+    const s=fixture(); s.render(); s.render([4,5,6],2000);
+    const alert=s.alerts[0]; assert.equal(alert.priority,1);
+    s.reply({state:'idle',ready:false}); s.render();
+    const count=s.messages.length;
+    for(let i=0;i<10;i++)s.render([4,5,6],10);
+    assert.equal(s.messages.length,count);
+    s.render([7,8,9],29900); s.reply(); s.render();
+    assert.equal(s.bulb.realtimeBridge.lastError,''); assert.deepEqual(s.cleared,[alert.id]);
+    assert(s.messages.at(-1).message.includes('streaming'));
+    assert(s.messages.at(-1).tooltip.includes('not measured BLE or optical FPS'));
+    s.render([9,8,7],2000); assert.equal(s.alerts.length,2);
+    s.bulb.realtimeBridge.setEnabled(false); assert.deepEqual(s.cleared,[alert.id,s.alerts[1].id]);
+});
+check('explicit power methods and Single color shutdown remain allowed during outage cooldown', () => {
+    const s=fixture(); s.render(); s.render([1,2,3],2000); s.render([1,2,3],2000);
+    assert.equal(s.bulb.realtimeBridge.phase,'cooldown'); assert.equal(s.lan().length,0);
+    s.bulb.turnOn(); assert.equal(s.lan().at(-1).data.msg.cmd,'turn');
+    s.ui.shutDown('Single color','#010203');
+    const colors=s.lan().filter(w=>w.data.msg.cmd==='colorwc');
+    assert.equal(colors.length,1); assert.deepEqual(colors[0].data.msg.data.color,{r:1,g:2,b:3});
+    assert(s.sockets[0].closed);
 });
 check('shutdown Release control requests restoration and closes its only socket', () => {
     const s = fixture(); s.render(); s.reply(); s.ui.shutDown('Release control','#010203');
