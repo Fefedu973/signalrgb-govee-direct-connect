@@ -5,7 +5,7 @@ import GoveeController from "./GoveeController.test.js";
 import GoveeDeviceUI from "./GoveeDeviceUI.test.js";
 
 export function Name() { return "Govee Direct Connect"; }
-export function Version() { return "2.1.5-local-ip-recovery"; }
+export function Version() { return "2.2.0-h6008-ble"; }
 export function Type() { return "network"; }
 export function Publisher() { return "RickOfficial"; }
 export function Size() { return [1, 1]; }
@@ -19,6 +19,7 @@ export function ControllableParameters()
 		{"property":"forcedColor", "group":"lighting", "label":"Forced Color", "min":"0", "max":"360", "type":"color", "default":"#009bde"},
 		{"property":"turnOff", "group":"lighting", "label":"On shutdown", "type":"combobox", "values":["Release control", "Single color", "Turn device off"], "default":"Turn device off"},
         {"property":"shutDownColor", "group":"lighting", "label":"Shutdown Color", "min":"0", "max":"360", "type":"color", "default":"#8000FF"},
+        {"property":"H6008Realtime", "group":"settings", "label":"H6008 BLE realtime bridge", "type":"boolean", "default":false},
         {"property":"frameDelay", "group":"settings", "label":"Delay between frames", "type":"combobox", "values":["0", "10", "50", "100"], "default":"0"}
 	];
 }
@@ -37,7 +38,7 @@ export function Initialize()
 export function Render()
 {
     let now = Date.now();
-    goveeUI.render(lightingMode, forcedColor, now, frameDelay);
+    goveeUI.render(lightingMode, forcedColor, now, frameDelay, typeof H6008Realtime !== 'undefined' && H6008Realtime);
 }
 
 export function Shutdown(SystemSuspending)

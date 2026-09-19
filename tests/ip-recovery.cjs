@@ -44,6 +44,7 @@ function load(candidate) {
             .replace(/^import .*;\r?\n/gm, '').replace(/export default class /g, 'class ').replace(/export function /g, 'function ');
         vm.runInContext(src + '\n' + expose, context, { filename });
     };
+    run('GoveeRealtimeBridge.test.js', 'this.GoveeRealtimeBridge = GoveeRealtimeBridge;');
     run('GoveeDevice.test.js', 'this.GoveeDevice = GoveeDevice;');
     run('GoveeController.test.js', 'this.GoveeController = GoveeController;');
     run('GoveeDirectConnect.js', 'this.DiscoveryService = DiscoveryService;');

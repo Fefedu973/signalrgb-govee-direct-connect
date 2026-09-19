@@ -10,6 +10,10 @@ Install this fork through the button above or add `https://github.com/Fefedu973/
 
 The patch uses standard LAN discovery. It does not remove firmware color transitions, introduce a new bulb protocol, or claim support for additional hardware. See [the implementation and validation notes](IP-RECOVERY.md).
 
+## Optional H6008 BLE realtime transport
+
+An optional **H6008 BLE realtime bridge** setting routes H6008 single-color devices through a separately configured local BLE companion. It is **off by default**. Other models and the existing LAN protocols remain unchanged. The companion is required; enabling this option alone does not provide a BLE backend. See [the transport contract and validation notes](H6008-BLE.md).
+
 ## Getting started
 This SignalRGB Addon allows you to add Govee devices via a direct IP connection. You control the amount of leds of the device and what protocol is used to communicate with the device. You can even use components to build your exact Govee Glide setup.
 

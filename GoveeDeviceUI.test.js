@@ -128,8 +128,9 @@ export default class GoveeDeviceUI
         return result;
     }
 
-    render(lightingMode, forcedColor, now, frameDelay)
+    render(lightingMode, forcedColor, now, frameDelay, realtime)
     {
+        this.goveeDevice.realtimeBridge.setEnabled(realtime);
         switch(lightingMode)
         {
             case "Test Pattern":
@@ -164,6 +165,14 @@ export default class GoveeDeviceUI
 
     shutDown(shutDownMode, shutDownColor)
     {
+        const finalColor = shutDownMode === 'Single color' ? this.hexToRGB(shutDownColor) : undefined;
+        const handled = this.goveeDevice.realtimeBridge.shutdown(shutDownMode, finalColor, Date.now());
+        if (handled && ['Release control', 'Single color'].includes(shutDownMode))
+        {
+            this.goveeDevice.shuttingDown = true;
+            this.goveeDevice.stopUdpServer();
+            return;
+        }
         switch(shutDownMode)
         {
             case "Release control":

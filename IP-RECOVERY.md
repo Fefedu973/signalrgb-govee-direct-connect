@@ -1,6 +1,6 @@
 # Recover saved devices after an IP address change
 
-This fork is based on upstream commit `b6bdd8511f72e4c01f6ac4511b66a344cae2928b` (addon version 2.1.4). The patched addon reports `2.1.5-local-ip-recovery`.
+This fork is based on upstream commit `b6bdd8511f72e4c01f6ac4511b66a344cae2928b` (addon version 2.1.4). The IP recovery change first shipped as `2.1.5-local-ip-recovery` and remains in `2.2.0-h6008-ble`, which adds the separately documented optional BLE transport.
 
 ## Problem and behavior
 
