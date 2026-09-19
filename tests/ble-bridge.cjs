@@ -9,11 +9,12 @@ let checks = 0;
 function check(name, run) { run(); checks++; console.log('PASS ' + name); }
 function fixture({sku = 'H6008', type = 3, enabled = true, baseline = false} = {}) {
     const clock = {now: 100000}, writes = [], logs = [], sockets = [];
-    const host = {log: value => logs.push(value), error: value => {throw Error(value);}, pause() {}};
+    const host = {log: value => logs.push(value), error: value => {throw Error(value);}, pause() {},
+        setName(){},setImageFromBase64(){},denotify(){},setSize(){},setControllableLeds(){},addProperty(){},color(){return [12,34,56];}};
     const context = vm.createContext({
         Date: class extends Date { static now() { return clock.now; } },
         encode: data => Buffer.from(data).toString('base64'), decode: data => [...Buffer.from(data, 'base64')],
-        device: host, udp: {createSocket() {
+        device: host, goveeProducts:{default:{base64Image:'data:image/png;base64,AA=='}}, udp: {createSocket() {
             const socket = {closed: false, on() {}, bind() {}, disconnect() {},
                 close() {this.closed = true;}, write(data, address, port) {
                     assert(!this.closed, 'write after socket close');
@@ -30,8 +31,14 @@ function fixture({sku = 'H6008', type = 3, enabled = true, baseline = false} = {
     };
     if (!baseline) load('GoveeRealtimeBridge.test.js', 'GoveeRealtimeBridge');
     load('GoveeDevice.test.js', 'GoveeDevice');
+    load('GoveeController.test.js', 'GoveeController');
     load('GoveeDeviceUI.test.js', 'GoveeDeviceUI');
     const bulb = new context.GoveeDevice({id, ip:'192.0.2.21', sku, type, leds:1, split:1, uniquePort:47001});
+    if (!baseline) {
+        assert.equal(bulb.realtimeBridge,null);
+        assert.equal(JSON.parse(JSON.stringify(bulb)).sku,sku);
+        bulb.realtimeBridge=new context.GoveeRealtimeBridge(bulb);
+    }
     bulb.setupUdpServer(); bulb.onOff = 1; bulb.hasReceivedStatus = true; bulb.lastStatus = clock.now; bulb.lastDeviceDataCheck = clock.now;
     if (!baseline) bulb.realtimeBridge.setEnabled(enabled);
     const ui = Object.create(context.GoveeDeviceUI.prototype); ui.device = host; ui.goveeDevice = bulb;
@@ -45,8 +52,22 @@ function fixture({sku = 'H6008', type = 3, enabled = true, baseline = false} = {
                 device:id, state:'streaming', ready:true, last_sent_rgb:[12,34,56], error:null, ...state
             }], ...extra})});
     };
-    return {clock, writes, logs, sockets, bulb, ui, render, bridge, lan, reply};
+    return {clock, writes, logs, sockets, bulb, ui, render, bridge, lan, reply, context, host};
 }
+check('Discovery controller crosses JSON boundary before the real renderer creates its BLE owner', () => {
+    const s=fixture();
+    const discoveryDevice=new s.context.GoveeDevice({id,ip:'192.0.2.21',sku:'H6008',type:'3',leds:'1',split:'1',uniquePort:47002});
+    const sourceController=new s.context.GoveeController(discoveryDevice);
+    const controllerData=JSON.parse(JSON.stringify(sourceController));
+    assert.equal(controllerData.device.realtimeBridge,null);
+    const ui=new s.context.GoveeDeviceUI(s.host,controllerData);
+    const renderer=ui.goveeDevice;
+    assert.equal(renderer.realtimeBridge.owner,renderer);
+    renderer.hasReceivedStatus=true;renderer.onOff=1;renderer.lastStatus=s.clock.now;
+    ui.render('Canvas','#000000',s.clock.now,100,true);
+    assert.equal(s.bridge().at(-1).data.op,'colors');
+    assert.equal(s.lan().length,0);
+});
 check('disabled option and non-H6008 preserve actual LAN commands', () => {
     for (const sku of ['H6008', 'H6104', 'H9999']) for (const type of [1,2,3,4,5]) {
         if (sku === 'H6008' && type === 3) continue;

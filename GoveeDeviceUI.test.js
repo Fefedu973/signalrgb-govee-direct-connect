@@ -1,5 +1,6 @@
 import goveeProducts from "./govee-products.test.js";
 import GoveeDevice from "./GoveeDevice.test.js";
+import GoveeRealtimeBridge from "./GoveeRealtimeBridge.test.js";
 
 const PROTOCOL_SINGLE_COLOR = 3;
 
@@ -13,6 +14,8 @@ export default class GoveeDeviceUI
         device.log('Setting up Govee device and udp server');
         this.goveeDevice = new GoveeDevice(controller.device);
         this.goveeDevice.setupUdpServer();
+        // Construct only in the renderer, after Discovery data crossed the engine boundary.
+        this.goveeDevice.realtimeBridge = new GoveeRealtimeBridge(this.goveeDevice);
 
         // Setup lighting device
         this.ledCount = controller.device.leds;

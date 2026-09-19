@@ -1,6 +1,5 @@
 import {encode, decode} from "@SignalRGB/base64";
 import udp from "@SignalRGB/udp";
-import GoveeRealtimeBridge from "./GoveeRealtimeBridge.test.js";
 
 const PROTOCOL_SINGLE_COLOR = 3;
 const GRADIENT_OFF_SKUS = [
@@ -65,12 +64,13 @@ export default class GoveeDevice
         this.waitingForDeviceUpdate = false;
 
         this.shuttingDown = false;
-        this.realtimeBridge = new GoveeRealtimeBridge(this);
+        // Discovery passes this object between JavaScript engines. Keep it serializable.
+        this.realtimeBridge = null;
     }
 
     handleSocketMessage(message)
     {
-        if (this.realtimeBridge.handleMessage(message, Date.now())) return;
+        if (this.realtimeBridge && this.realtimeBridge.handleMessage(message, Date.now())) return;
         try
         {
             let goveeResponse = JSON.parse(message.data);
@@ -535,7 +535,7 @@ export default class GoveeDevice
     {
         if (this.shuttingDown) return;
 
-        if (this.enabled && this.realtimeBridge.render(colors[0], now)) return;
+        if (this.enabled && this.realtimeBridge && this.realtimeBridge.render(colors[0], now)) return;
 
         if (this.enabled)
         {
@@ -617,7 +617,7 @@ export default class GoveeDevice
 
     singleColor(color, now, shutDown)
     {
-        if (!shutDown && this.realtimeBridge.render(color, now)) return;
+        if (!shutDown && this.realtimeBridge && this.realtimeBridge.render(color, now)) return;
         if (now - this.lastRender > 10000 || shutDown)
         {
             // Turn off Razer mode
