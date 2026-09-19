@@ -33,6 +33,8 @@ py -3.13 -m venv .venv
 
 Keep the personal configuration outside the repository at `%LOCALAPPDATA%\GoveeBleBridge\config.local.json`; follow the [companion guide](ble-companion/README.md) for configuration and supported profiles. Do not carry forward a `python_libs` override pointing to an older dependency directory when using this virtual environment. `Lancer-pont.cmd` starts this checkout with its local virtual environment, and `Arreter-pont.cmd` requests a clean shutdown.
 
+When the companion is installed alongside `SignalRGB-Local-Bridges`, its private configuration instead lives in that repository's ignored `local-installation/govee/config.local.json`. Both local launchers prefer this shared location when present. Explicit `-ConfigFile` always takes precedence. This avoids MSIX application-data virtualization: a Windows logon task and a packaged application's child process must see the same actual file, not two virtualized AppData copies.
+
 For automatic startup at Windows sign-in, use the shared [SignalRGB Local Bridges supervisor](https://github.com/Fefedu973/SignalRGB-Local-Bridges/tree/main/startup). It supplies the private configuration and Python paths explicitly, checks for existing bridge processes and retries with backoff. The SignalRGB addon and the companion are separate installations: updating the addon alone does not update this checkout.
 
 ## LAN setup
