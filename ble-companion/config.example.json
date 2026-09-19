@@ -1,0 +1,15 @@
+{
+  "bind": "127.0.0.1",
+  "port": 47684,
+  "communication_key_hex": "SET_LOCALLY_DO_NOT_COMMIT",
+  "api_token": null,
+  "minimum_interval_ms": 100,
+  "lease_ms": 2000,
+  "devices": [
+    {
+      "device": "YOUR_STABLE_GOVEE_DEVICE_ID",
+      "ble_address": "00:00:00:00:00:01",
+      "wifi_mac": "00:00:00:00:00:02"
+    }
+  ]
+}

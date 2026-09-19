@@ -8,13 +8,19 @@ This fork adds automatic recovery when a previously configured device receives a
 
 Install this fork through the button above or add `https://github.com/Fefedu973/signalrgb-govee-direct-connect` in SignalRGB Add-ons. Disable the original Govee Direct Connect addon before restarting so only one discovery service owns UDP port 4002. Existing saved devices are reused through the unchanged service name.
 
-The patch uses standard LAN discovery. It does not remove firmware color transitions, introduce a new bulb protocol, or claim support for additional hardware. See [the implementation and validation notes](IP-RECOVERY.md).
+The IP-recovery portion uses standard LAN discovery. It does not remove firmware color transitions, introduce a new bulb protocol, or claim support for additional hardware. See [the implementation and validation notes](IP-RECOVERY.md).
 
 ## Optional H6008 BLE realtime transport
 
-An optional **H6008 BLE realtime bridge** setting routes H6008 single-color devices through a separately configured local BLE companion. It is **off by default**. Other models and the existing LAN protocols remain unchanged. The companion is required; enabling this option alone does not provide a BLE backend. See [the transport contract and validation notes](H6008-BLE.md).
+An optional **H6008 BLE realtime bridge** setting routes H6008 single-color devices through a separately configured local BLE companion. It is **off by default**. Other models and the existing LAN protocols remain unchanged. The companion source is provided in [`ble-companion/`](ble-companion/README.md), but it must be installed, privately configured and run separately; enabling the SignalRGB option alone does not start it. See [the transport contract and validation notes](H6008-BLE.md).
 
 While enabled, a companion outage holds the last color, shows an alert and retries automatically every 30 seconds. It does not silently resume fading LAN colors. Disable the option explicitly to restore LAN rendering. The device page shows the active transport and local request/reply counters.
+
+## Bluetooth-only client and companion profiles
+
+The separate [Govee Bluetooth Only client](BLE-ONLY.md) discovers allowlisted, single-zone RGB profiles from the same local companion. Its initial classic profile targets H6159 and retains normal device transitions; it does not enable the H6008 realtime protocol. Only profiles explicitly declared by the backend are accepted. Addressable/multi-zone devices and unverified models are not covered by this client.
+
+Read the [companion setup instructions](ble-companion/README.md) before enabling a Bluetooth controller. No real Bluetooth addresses, communication keys or private configuration are included in this repository. Keep those in a separate local configuration. The [backend extension guide](ble-companion/EXTENDING.md) and [client architecture notes](BLE-ONLY.md#architecture-and-adding-a-profile) explain how to add a proven compatible profile without another JavaScript model list; a new protocol family may require backend code and hardware validation.
 
 ## Getting started
 This SignalRGB Addon allows you to add Govee devices via a direct IP connection. You control the amount of leds of the device and what protocol is used to communicate with the device. You can even use components to build your exact Govee Glide setup.

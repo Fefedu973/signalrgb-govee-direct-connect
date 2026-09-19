@@ -1,0 +1,74 @@
+{
+  "date": "2026-09-19",
+  "model": "H6008",
+  "hardware": "1.07.03",
+  "firmware": "1.01.25",
+  "measurement": "completed host BLE RGB writes, not per-frame optical confirmation",
+  "user_observation": "Both fluid; no visible difference between 10fps and 20fps requested",
+  "production_interval_ms": 100,
+  "all_three_restored": true,
+  "phases": [
+    {
+      "requested_fps": 10,
+      "submitted_frames": 100,
+      "observation_seconds": 10.14,
+      "bulbs": {
+        "A": {
+          "completed_ble_writes": 99,
+          "observation_seconds": 10.14,
+          "writes_per_second": 9.763,
+          "interval_ms_p50": 94.0,
+          "interval_ms_p95": 140.15,
+          "timestamps_complete": true
+        },
+        "B": {
+          "completed_ble_writes": 100,
+          "observation_seconds": 10.14,
+          "writes_per_second": 9.862,
+          "interval_ms_p50": 94.0,
+          "interval_ms_p95": 140.1,
+          "timestamps_complete": true
+        },
+        "C": {
+          "completed_ble_writes": 100,
+          "observation_seconds": 10.14,
+          "writes_per_second": 9.862,
+          "interval_ms_p50": 94.0,
+          "interval_ms_p95": 140.0,
+          "timestamps_complete": true
+        }
+      }
+    },
+    {
+      "requested_fps": 20,
+      "submitted_frames": 200,
+      "observation_seconds": 10.141,
+      "bulbs": {
+        "A": {
+          "completed_ble_writes": 141,
+          "observation_seconds": 10.141,
+          "writes_per_second": 13.904,
+          "interval_ms_p50": 63.0,
+          "interval_ms_p95": 79.7,
+          "timestamps_complete": true
+        },
+        "B": {
+          "completed_ble_writes": 143,
+          "observation_seconds": 10.141,
+          "writes_per_second": 14.101,
+          "interval_ms_p50": 63.0,
+          "interval_ms_p95": 94.0,
+          "timestamps_complete": true
+        },
+        "C": {
+          "completed_ble_writes": 143,
+          "observation_seconds": 10.141,
+          "writes_per_second": 14.101,
+          "interval_ms_p50": 63.0,
+          "interval_ms_p95": 92.3,
+          "timestamps_complete": true
+        }
+      }
+    }
+  ]
+}

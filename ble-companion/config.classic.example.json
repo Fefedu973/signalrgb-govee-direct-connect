@@ -1,0 +1,14 @@
+{
+  "bind": "127.0.0.1",
+  "port": 47684,
+  "minimum_interval_ms": 100,
+  "lease_ms": 2000,
+  "devices": [
+    {
+      "device": "shelf",
+      "profile": "h6159-classic-v1",
+      "name": "Shelf strip",
+      "ble_address": "00:00:00:00:00:03"
+    }
+  ]
+}
