@@ -35,6 +35,7 @@ class ClassicSession:
         self.power_seen_on = False
         self.external_power_off = False
         self.external_power_preserved = False
+        self.blackout_owned = False
         self.last_sent = None
         self.last_brightness_sent = None
         self.last_sent_at = -1e9
@@ -129,15 +130,17 @@ class ClassicSession:
         return self.requested and not self.stopping and self.clock() < self.deadline
 
     def status(self):
-        ready = bool(self.active() and self.state in ('ready', 'streaming') and
+        ready = bool(self.active() and self.state in ('ready', 'streaming', 'blackout') and
                      self.transport is not None and self.transport.connected)
         return {
             'device': self.device['device'], 'profile': self.profile.id,
             'state': self.state, 'ready': ready, 'power': self.power,
             'last_sent_rgb': list(self.last_sent) if self.last_sent is not None else None,
+            'last_sent_brightness': self.last_brightness_sent,
             'error': self.error, 'restore_error': self.restore_error,
             'restored_exact': self.restored_exact, 'failures': self.failures,
             'external_power_preserved': self.external_power_preserved,
+            'blackout_owned': self.blackout_owned,
             'initial_state': None if self.snapshot is None else {
                 'mode_hex': self.snapshot['mode'].hex(),
                 'power': self.snapshot['power'],
@@ -161,12 +164,41 @@ class ClassicSession:
         # The first OFF snapshot precedes our authorized initial power decision.
         # Only a subsequent OFF after a known ON is an external power override.
         if self.initial_power_consumed:
-            if value == 0 and self.power_seen_on:
+            if value == 0 and self.power_seen_on and not self.blackout_owned:
                 self.external_power_off = True
             elif value == 1:
                 self.power_seen_on = True
                 self.external_power_off = False
         self.power = value
+
+    def _power_black_policy(self):
+        return (getattr(self.profile, 'power_off_on_black', False) and
+                self.profile.capabilities.get('power') is True)
+
+    def _effective_rgb(self):
+        if getattr(self.profile, 'black_at_zero_brightness', False) and self.desired_brightness == 0:
+            return (0, 0, 0)
+        return self.desired
+
+    async def _read_power(self):
+        reply = await self.transport.query(1)
+        if len(reply) != 20 or reply[:2] != b'\xaa\x01' or reply[2] not in (0, 1):
+            raise ValueError('Invalid classic power confirmation')
+        self._observe_power(reply[2])
+        self.last_power_at = self.clock()
+
+    async def _set_power_confirmed(self, on):
+        await self._write(self.profile.power(on))
+        await self._read_power()
+        if self.power != int(on):
+            raise RuntimeError('Power change was not confirmed')
+
+    async def _send_rgb(self, rgb):
+        await self._write(self.profile.color(rgb))
+        self.last_sent = rgb
+        self.last_sent_at = self.clock()
+        self.frame_writes += 1
+        self.frame_history.append([self.frame_writes, round(self.last_sent_at, 6)])
 
     async def _disconnect(self):
         if self.transport is not None:
@@ -210,12 +242,16 @@ class ClassicSession:
             before = await self._snapshot()
             if revision != self.release_revision:
                 return False
-            if self.turn_off:
+            final_rgb = self.final_rgb
+            if final_rgb is not None and getattr(self.profile, 'black_at_zero_brightness', False) and before['brightness_raw'] == 0:
+                final_rgb = (0, 0, 0)
+            final_blackout = self._power_black_policy() and final_rgb == (0, 0, 0)
+            if self.turn_off or final_blackout:
                 command = self.profile.power(False)
                 target = dict(before, power=0)
             else:
-                command = self.profile.color(self.final_rgb)
-                target = dict(before, mode=bytes(command[2:19]), rgb=self.final_rgb)
+                command = self.profile.color(final_rgb)
+                target = dict(before, mode=bytes(command[2:19]), rgb=final_rgb)
             await self._write(command)
             if revision != self.release_revision:
                 return False
@@ -223,10 +259,10 @@ class ClassicSession:
             if revision != self.release_revision:
                 return False
             matcher = getattr(self.profile, 'matches_color_mode', None)
-            if self.final_rgb is not None and callable(matcher):
+            if self.final_rgb is not None and not final_blackout and callable(matcher):
                 matches = (after['power'] == target['power'] and
                            after['brightness_raw'] == target['brightness_raw'] and
-                           matcher(after['mode'], self.final_rgb))
+                           matcher(after['mode'], target['rgb']))
             else:
                 matches = self._same(after, target)
             if not matches:
@@ -302,6 +338,7 @@ class ClassicSession:
                 if completed:
                     self.snapshot = None
                     self.modified = False
+                    self.blackout_owned = False
                     self.state = 'idle'
                     self.error = None
                 else:
@@ -346,7 +383,11 @@ class ClassicSession:
             if not self.initial_power_consumed:
                 self.initial_power_consumed = True
                 target_power = self.power if self.desired_on is None else int(self.desired_on)
-                if self.desired_on is not None and self.power != target_power:
+                initial_black = self._power_black_policy() and self._effective_rgb() == (0, 0, 0) and self.desired_on is True
+                if initial_black and self.power == 0 and not self.external_power_off:
+                    # Defer the authorized initial ON instead of flashing old RGB.
+                    self.blackout_owned = True
+                if self.desired_on is not None and self.power != target_power and not initial_black and not self.blackout_owned:
                     if not self.active():
                         await self.release()
                         return
@@ -369,6 +410,45 @@ class ClassicSession:
             if not self.active():
                 await self.release()
                 return
+            rgb = self._effective_rgb()
+            wants_black = self._power_black_policy() and rgb == (0, 0, 0) and self.desired_on is True
+            if wants_black:
+                if not self.blackout_owned:
+                    # Read immediately before claiming OFF; a prior manual OFF
+                    # must never become permission to turn the strip back on.
+                    await self._read_power()
+                    if not self.active():
+                        await self.release()
+                        return
+                    if self.power == 0 or self.external_power_off:
+                        self.state = 'paused_off'
+                        return
+                    self.blackout_owned = True
+                if self.power != 0:
+                    await self._set_power_confirmed(False)
+                self.state = 'blackout'
+                return
+            if self.blackout_owned and self.desired_on is True:
+                if self.clock() - self.last_sent_at < self.interval:
+                    self.state = 'blackout'
+                    return
+                # Preload the newest brightness/RGB while OFF before returning
+                # power. This prevents an old-white flash on supported hardware.
+                if self.desired_brightness is not None:
+                    await self._write(self.profile.brightness(self.desired_brightness))
+                    self.last_brightness_sent = self.desired_brightness
+                if not self.active():
+                    await self.release()
+                    return
+                if rgb is not None:
+                    await self._send_rgb(rgb)
+                if not self.active():
+                    await self.release()
+                    return
+                await self._set_power_confirmed(True)
+                self.blackout_owned = False
+                self.state = 'streaming' if rgb is not None else 'ready'
+                return
             if self.power != 1 or self.desired_on is False:
                 self.last_sent = None
                 self.last_brightness_sent = None
@@ -385,13 +465,9 @@ class ClassicSession:
                 if not self.active():
                     await self.release()
                     return
-            if self.desired is not None and self.desired != self.last_sent:
-                rgb = self.desired
-                await self._write(self.profile.color(rgb))
-                self.last_sent = rgb
-                self.last_sent_at = self.clock()
-                self.frame_writes += 1
-                self.frame_history.append([self.frame_writes, round(self.last_sent_at, 6)])
+            rgb = self._effective_rgb()
+            if rgb is not None and rgb != self.last_sent:
+                await self._send_rgb(rgb)
                 self.state = 'streaming'
         except Exception as ex:
             self.error = str(ex) or type(ex).__name__

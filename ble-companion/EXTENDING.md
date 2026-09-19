@@ -27,6 +27,10 @@ legacy_default = profile_for_device({})   # h6008-realtime-v1, compatibilité hi
 
 Chaque `Profile` expose `id`, `model`, `family`, `bluetooth_only`, `capabilities`, `minimum_interval` en secondes et `authentication`. Les capacités sont `rgb`, `brightness`, `power`, `restore` et `addressable`. Elles décrivent le chemin réellement implémenté par le pont. Ainsi, power/brightness sont faux dans les métadonnées H6008 du pont actuel, même si ces fonctions existent par ailleurs sur le matériel.
 
+La politique facultative `black_at_zero_brightness` vaut `False` par défaut. Elle est activée seulement pour H6159 à la suite du retour utilisateur : la luminosité0% seule laisse cette bande éclairée. La session doit alors rendre du RGB noir pour une demande de0%, sans assimiler ce rendu à une commande power-off. Le constructeur du domaine04 et la restauration des octets bruts ne sont pas modifiés par cette propriété. Ne pas activer cette politique sur d'autres modèles sans preuve de leur comportement à0%.
+
+H6159 déclare également `power_off_on_black=True`, `False` par défaut ailleurs. Le retour utilisateur ultérieur indique que RGB noir seul laisse encore cette bande éclairée. Pour ce profil, la session transforme donc un noir effectif (Canvas noir ou luminosité0%) en commande power-off, et ne rétablit l'alimentation pour une couleur non noire que si elle avait elle-même effectué la coupure. Ce comportement doit être distingué d'une extinction externe à respecter. La validation matérielle de cette dernière politique était en attente lors de sa préparation ; le profil ne revendique pas un nouvel opcode de couleur ou une propriété universelle de tous les H6159.
+
 Pour la famille classique, les fonctions sont :
 
 ```text
@@ -79,7 +83,7 @@ Une famille authentifiée doit définir sa propre procédure de session et véri
 
 Le profil emploie des paquets20octets, `33 05 02 R G B`, power01, brightness04, lectures AA01/04/05 et XOR final. Il ne demande aucun mode anti-fondu et n'envoie pas E7 ni AA14. L'authentification et l'identité AA14 de H6008 ne sont pas transférées à cette bande par supposition.
 
-Les trois réponses d'état doivent être obtenues et validées **avant les changements**. Le mode autorisé est `[02,R,G,B,flag,R2,G2,B2,puis9zéros]`, avec flag00 ou01. L'APK H6159 décrit ce champ comme un booléen suivi d'un second triplet RGB ; son usage précis dans l'interface n'est pas établi ici. Le blanc initial observé portait flag01 ; une lecture ultérieure a aussi rendu le second triplet D6E1FF. Ces champs établis sont tous conservés. Les commandes RGB normales ont produit flag00.
+Les trois réponses d'état doivent être obtenues et validées **avant les changements**. Le mode autorisé est `[02,R,G,B,flag,R2,G2,B2,puis9zéros]`, avec flag00 ou01. L'APK H6159 décrit ce champ comme un booléen suivi d'un second triplet RGB. `ColorFragment.J0()` sélectionne RGB primaire avec flagfalse ; `K0()` utilise un chemin blanc, primaire `toWhite()`, flagtrue et second triplet choisi. La conversion physique de ce chemin blanc n'est pas établie ici. Le blanc initial observé portait flag01 ; une lecture ultérieure a aussi rendu le second triplet D6E1FF. Ces champs établis sont tous conservés. Les commandes RGB normales ont produit flag00.
 
 La restitution conserve les17octets du mode original exactement. Pour vérifier une nouvelle couleur RGB normale, `matches_color_mode` compare RGB **et exige flag00** : une lecture flag01 avec le bon triplet primaire ne prouve pas que la couleur demandée soit sélectionnée. Scène, mode0D, booléen hors00/01, octets non nuls après le second triplet, checksum incorrect ou champs inconnus provoquent un refus explicite. Le second triplet peut être republié différemment par le firmware entre sessions ; une relecture immédiate identique n'est pas une preuve de persistance indéfinie.
 

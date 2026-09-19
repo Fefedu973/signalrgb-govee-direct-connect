@@ -37,6 +37,8 @@ The current classic worker requires a restorable snapshot for its safe lease lif
 
 ## Validation
 
-Run `node tests/bluetooth-only.cjs`. **Twenty-one VM/contract tests pass**, executing the actual plugin source. They cover discovery, stable JSON identities, topology filtering, sender/ACK checks, cadence/coalescing, heartbeat, outage/retry, acquisition timeout, bridge restart, 120 seconds paused externally off, recovery from transient reconnect errors, shutdown policies, optional capabilities, incompatible saved settings and the QML method contract. Tests perform no network/Bluetooth traffic.
+Run `node tests/bluetooth-only.cjs`. **Twenty-three VM/contract tests pass**, executing the actual plugin source. They cover discovery, stable JSON identities, topology filtering, sender/ACK checks, cadence/coalescing, heartbeat, outage/retry, acquisition timeout, bridge restart, 120 seconds paused externally off, recovery from transient reconnect errors, shutdown policies, optional capabilities, incompatible saved settings, Canvas brightness and the QML method contract. Tests perform no network/Bluetooth traffic.
+
+Canvas colors already include SignalRGB's brightness adjustment and are not multiplied again. At global zero the client sends RGB `[0,0,0]`, even with the strip's own brightness at 100. The H6159 profile handles the tested hardware's failure to go dark from black RGB alone: the companion uses verified power-off for effective black, and resumes power when a non-black color returns only if it owns that blackout. Its separate strip-brightness value of zero also produces effective black. This is a profile-specific behavior, not the H6008 anti-fade mode.
 
 The QML checks validate its companion-file contract; they are not a SignalRGB GUI render test. Real discovery and physical H6159 behavior still require the backend and the authorized hardware validation. No installer or remote publication is performed by these files.

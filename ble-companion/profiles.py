@@ -112,6 +112,8 @@ class Profile:
     restore_commands: Optional[Callable] = None
     matches_color_mode: Optional[Callable] = None
     write_response: Optional[bool] = None
+    black_at_zero_brightness: bool = False
+    power_off_on_black: bool = False
 
 
 _PROFILES = {
@@ -121,7 +123,8 @@ _PROFILES = {
                       'restore': True, 'addressable': False},
         minimum_interval=.1, authentication='none', color=_color, power=_power,
         brightness=_brightness, decode_snapshot=_snapshot, restore_commands=_restore,
-        matches_color_mode=_matches_color_mode, write_response=True),
+        matches_color_mode=_matches_color_mode, write_response=True,
+        black_at_zero_brightness=True, power_off_on_black=True),
     'h6008-realtime-v1': Profile(
         id='h6008-realtime-v1', model='H6008', family='h6008', bluetooth_only=False,
         capabilities={'rgb': True, 'brightness': False, 'power': False,

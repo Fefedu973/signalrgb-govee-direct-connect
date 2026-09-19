@@ -66,6 +66,16 @@ check('Canvas sends one zone, brightness and power intent only over local bridge
     assert.deepEqual(c.data,{id:c.data.id,op:'strip_colors',device:'synthetic-shelf',rgb:[10,20,30],brightness:75,on:true});
     assert.equal(f.writes.filter(x=>x.data.op==='heartbeat').length,1);
 });
+check('actual Canvas Render forwards global-brightness black while strip brightness stays nonzero',()=>{
+    const f=fixture();f.context.device.color=()=>[0,0,0];f.context.device.getBrightness=()=>0;
+    f.context.stripBrightness=100;f.run('Initialize()');f.render();
+    assert.deepEqual(f.writes[0].data.rgb,[0,0,0]);assert.equal(f.writes[0].data.brightness,100);
+});
+check('actual Canvas Render does not double-apply SignalRGB brightness',()=>{
+    const f=fixture();let reads=0;f.context.device.color=()=>[50,25,10];
+    f.context.device.getBrightness=()=>{reads++;return 50;};f.run('Initialize()');f.render();
+    assert.deepEqual(f.writes[0].data.rgb,[50,25,10]);assert.equal(reads,0);
+});
 check('one pending color coalesces frames and no more than 10 color requests/s',()=>{
     const f=fixture();f.run('Initialize()');f.render();const first=f.writes.find(x=>x.data.op==='strip_colors');
     f.context.device.color=()=>[90,80,70]; f.render(100);assert.equal(f.writes.filter(x=>x.data.op==='strip_colors').length,1);

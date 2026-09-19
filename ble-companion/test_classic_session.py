@@ -542,6 +542,171 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(session.restored_exact)
                 self.assertIsNotNone(session.snapshot)
 
+    async def test_zero_brightness_black_coalesces_and_positive_restores_latest_canvas(self):
+        from dataclasses import replace
+        from profiles import get_profile
+        session, strip, clock = self.make()
+        session.profile = replace(get_profile('h6159-classic-v1'), power_off_on_black=False)
+        session.acquire((12, 34, 56), brightness=70)
+        await session.step()
+        clock.now = .11
+        session.acquire((12, 34, 56), brightness=0)
+        await session.step()
+        self.assertEqual(session.status()['last_sent_rgb'], [0, 0, 0])
+        self.assertEqual(session.status()['last_sent_brightness'], 0)
+        self.assertEqual(session.desired, (12, 34, 56))
+        count = len(strip.writes)
+        clock.now = .22
+        for value in range(100):
+            session.acquire((value, 22, 33), brightness=0)
+        await session.step()
+        self.assertEqual(len(strip.writes), count)
+        self.assertEqual(session.desired, (99, 22, 33))
+        clock.now = .33
+        session.acquire(brightness=20)
+        await session.step()
+        self.assertEqual(session.status()['last_sent_rgb'], [99, 22, 33])
+        self.assertEqual(session.status()['last_sent_brightness'], 20)
+        self.assertEqual(strip.writes[-1], Profile.color((99, 22, 33)))
+        self.assertFalse(any(raw[1] == 1 and raw[2] == 0 for raw in strip.writes))
+        session.request_release()
+        await session.step()
+        self.assertTrue(session.restored_exact)
+        self.assertEqual((strip.power, strip.brightness, strip.mode), strip.original)
+
+    async def test_zero_brightness_does_not_override_profiles_without_black_policy(self):
+        from dataclasses import replace
+        from profiles import get_profile
+        session, strip, clock = self.make()
+        session.profile = replace(get_profile('h6159-classic-v1'), black_at_zero_brightness=False, power_off_on_black=False)
+        session.acquire((70, 80, 90), brightness=0)
+        await session.step()
+        self.assertEqual(session.status()['last_sent_rgb'], [70, 80, 90])
+        self.assertEqual(strip.writes[-1], Profile.color((70, 80, 90)))
+        self.assertEqual(session.status()['last_sent_brightness'], 0)
+
+    async def test_final_color_at_observed_raw_zero_keeps_black_without_power_change(self):
+        from dataclasses import replace
+        from profiles import get_profile
+        session, strip, clock = self.make()
+        session.profile = replace(get_profile('h6159-classic-v1'), power_off_on_black=False)
+        session.acquire((1, 2, 3), brightness=0)
+        await session.step()
+        self.assertEqual(strip.power, 1)
+        before = len(strip.writes)
+        session.request_release(False, final_rgb=(200, 100, 50))
+        await session.step()
+        self.assertEqual(strip.writes[before:], [Profile.color((0, 0, 0))])
+        self.assertEqual((strip.power, strip.brightness), (1, 0))
+        self.assertEqual(session.state, 'idle')
+        self.assertIsNone(session.restore_error)
+
+    async def test_canvas_black_at_brightness100_powers_off_once_and_confirms_before_ready(self):
+        from profiles import get_profile
+        for ignored in (False, True):
+            session, strip, clock = self.make()
+            session.profile = get_profile('h6159-classic-v1')
+            strip.power = 1
+            strip.ignore_writes = ignored
+            session.acquire((0, 0, 0), brightness=100)
+            await session.step()
+            self.assertEqual(strip.writes, [Profile.power(False)])
+            self.assertEqual(session.frame_writes, 0)
+            if ignored:
+                self.assertFalse(session.status()['ready'])
+                self.assertIn('not confirmed', session.error)
+            else:
+                self.assertTrue(session.status()['ready'])
+                self.assertTrue(session.status()['blackout_owned'])
+                self.assertEqual(strip.power, 0)
+                clock.now = 1.6
+                session.heartbeat()
+                await session.step()
+                self.assertFalse(session.external_power_off)
+                self.assertEqual(strip.writes, [Profile.power(False)])
+
+    async def test_initial_black_has_no_on_flash_then_preloads_before_owned_resume(self):
+        from profiles import get_profile
+        session, strip, clock = self.make()
+        session.profile = get_profile('h6159-classic-v1')
+        session.acquire((10, 20, 30), brightness=0)
+        await session.step()
+        self.assertFalse(strip.writes)
+        self.assertTrue(session.status()['ready'])
+        self.assertTrue(session.blackout_owned)
+        self.assertEqual(session.frame_writes, 0)
+        clock.now = .2
+        session.acquire((90, 40, 20), brightness=60)
+        await session.step()
+        self.assertEqual([raw[1] for raw in strip.writes], [4, 5, 1])
+        self.assertEqual(strip.writes[-1], Profile.power(True))
+        self.assertEqual(session.frame_writes, 1)
+        self.assertEqual(session.status()['last_sent_brightness'], 60)
+        self.assertEqual(session.status()['last_sent_rgb'], [90, 40, 20])
+        self.assertFalse(session.blackout_owned)
+        session.request_release()
+        await session.step()
+        self.assertTrue(session.restored_exact)
+        self.assertEqual((strip.power, strip.brightness, strip.mode), strip.original)
+
+    async def test_external_off_before_black_is_never_claimed_or_undone(self):
+        from profiles import get_profile
+        session, strip, clock = self.make()
+        session.profile = get_profile('h6159-classic-v1')
+        session.acquire((50, 20, 30), brightness=70)
+        await session.step()
+        strip.power = 0
+        count = len(strip.writes)
+        clock.now = .2
+        session.acquire((0, 0, 0), brightness=100)
+        await session.step()
+        self.assertTrue(session.external_power_off)
+        self.assertFalse(session.blackout_owned)
+        self.assertEqual(session.state, 'paused_off')
+        clock.now = .4
+        session.acquire((70, 80, 90), brightness=100)
+        await session.step()
+        self.assertEqual(session.state, 'paused_off')
+        self.assertEqual(len(strip.writes), count)
+        self.assertEqual(strip.power, 0)
+
+    async def test_owned_blackout_survives_reconnect_and_original_snapshot_restores(self):
+        from profiles import get_profile
+        session, strip, clock = self.make()
+        session.profile = get_profile('h6159-classic-v1')
+        strip.power = 1
+        original = (strip.power, strip.brightness, strip.mode)
+        session.acquire((0, 0, 0), brightness=100)
+        await session.step()
+        session.transport.connected = False
+        count = len(strip.writes)
+        clock.now = .2
+        session.acquire((7, 8, 9), brightness=50)
+        await session.step()
+        self.assertEqual([raw[1] for raw in strip.writes[count:]], [4, 5, 1])
+        self.assertFalse(session.external_power_off)
+        self.assertFalse(session.blackout_owned)
+        self.assertEqual(strip.power, 1)
+        session.request_release()
+        await session.step()
+        self.assertTrue(session.restored_exact)
+        self.assertEqual((strip.power, strip.brightness, strip.mode), original)
+
+    async def test_shutdown_final_black_powers_off_with_verified_state_without_fake_rgb_frame(self):
+        from profiles import get_profile
+        session, strip, clock = self.make()
+        session.profile = get_profile('h6159-classic-v1')
+        session.acquire((50, 60, 70), brightness=80)
+        await session.step()
+        count, frames, brightness, mode = len(strip.writes), session.frame_writes, strip.brightness, strip.mode
+        session.request_release(False, final_rgb=(0, 0, 0))
+        await session.step()
+        self.assertEqual(strip.writes[count:], [Profile.power(False)])
+        self.assertEqual((strip.power, strip.brightness, strip.mode), (0, brightness, mode))
+        self.assertEqual(session.frame_writes, frames)
+        self.assertEqual(session.state, 'idle')
+        self.assertIsNone(session.restore_error)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
