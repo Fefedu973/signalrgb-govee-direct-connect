@@ -6,7 +6,7 @@ export default class GoveeController
     {
         this.device = goveeDevice;
 
-        this.id = goveeDevice.ip;
+        this.id = goveeDevice.controllerId || goveeDevice.ip;
         this.name = goveeDevice.getName();
 
         this.changed = false;
@@ -28,6 +28,10 @@ export default class GoveeController
 
     updateDevice(leds, type, split, ip)
     {
+        if (this.applySettings)
+        {
+            return this.applySettings(leds, type, split, ip);
+        }
         // Change the device data
         this.device.leds = leds;
         this.device.type = type;

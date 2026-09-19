@@ -5,7 +5,7 @@ import GoveeController from "./GoveeController.test.js";
 import GoveeDeviceUI from "./GoveeDeviceUI.test.js";
 
 export function Name() { return "Govee Direct Connect"; }
-export function Version() { return "2.1.4"; }
+export function Version() { return "2.1.5-local-ip-recovery"; }
 export function Type() { return "network"; }
 export function Publisher() { return "RickOfficial"; }
 export function Size() { return [1, 1]; }
@@ -67,6 +67,8 @@ export function DiscoveryService()
 
     this.discoveredDeviceData = {};
     this.GoveeDeviceControllers = {};
+    this.lastDiscoveryTime = 0;
+    this.DiscoveryInterval = 60000;
 
     this.Initialize = function() {
         this.lastPort = service.getSetting('ipCache', 'lastUniquePort');
@@ -128,7 +130,7 @@ export function DiscoveryService()
 
             let goveeController = this.GoveeDeviceControllers[cachedIp];
             
-            if (!service.hasController(cachedIp))
+            if (!service.hasController(goveeController.id))
             {
                 service.addController(goveeController);
                 // Announce the controller as a device
@@ -154,6 +156,14 @@ export function DiscoveryService()
             {
                 this.loadForcedDevices();
             }
+
+            // DHCP can change an accepted device's address. Only a scan with a
+            // matching saved device identifier may move an existing controller.
+            if (Date.now() - this.lastDiscoveryTime >= this.DiscoveryInterval)
+            {
+                this.lastDiscoveryTime = Date.now();
+                this.udpServer.write({msg: {cmd: 'scan', data: {account_topic: 'reserve'}}}, '239.255.255.250', 4001);
+            }
 		}
     }
 
@@ -166,6 +176,38 @@ export function DiscoveryService()
     {
         if (!value) return;
         const ip = this.getIPv4(value.address);
+        if (!ip) return;
+
+        let response;
+        try { response = JSON.parse(value.data); }
+        catch (err) { return; }
+        if (!response || !response.msg || !response.msg.data) return;
+
+        if (response.msg.cmd === 'scan')
+        {
+            const data = response.msg.data;
+            if (typeof data.device !== 'string' || data.ip !== ip) return;
+            const deviceId = data.device.toUpperCase();
+            const existing = Object.values(this.GoveeDeviceControllers).filter(controller =>
+                typeof controller.device.id === 'string' && controller.device.id.toUpperCase() === deviceId);
+
+            // Do not add unknown devices, guess by SKU, or overwrite another
+            // controller if the old address has been assigned to someone else.
+            if (existing.length === 1)
+            {
+                const controller = existing[0];
+                if (controller.device.sku && controller.device.sku !== data.sku) return;
+                if (controller.device.ip !== ip)
+                {
+                    if (!this.updateControllerSettings(controller, controller.device.leds,
+                        controller.device.type, controller.device.split, ip)) return;
+                    service.log(`Recovered ${data.sku} after IP change to ${ip}`);
+                }
+            }
+
+            const target = this.GoveeDeviceControllers[ip];
+            if (target && target.device.id && target.device.id.toUpperCase() !== deviceId) return;
+        }
 
         if (this.GoveeDeviceControllers.hasOwnProperty(ip))
         {
@@ -179,6 +221,7 @@ export function DiscoveryService()
 
     this.getIPv4 = function(address)
     {
+        if (typeof address !== 'string') return null;
         const ipv4Pattern = /(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)\.(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)\.(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)\.(\b25[0-5]|\b2[0-4][0-9]|\b[01]?[0-9][0-9]?)/;
         const match = address.match(ipv4Pattern);
         return match ? match[0] : null;
@@ -196,9 +239,53 @@ export function DiscoveryService()
     {
         if (this.GoveeDeviceControllers.hasOwnProperty(oldIp))
         {
-            this.GoveeDeviceControllers[newIp] = this.GoveeDeviceControllers[oldIp];
-            this.Delete(oldIp);
+            const controller = this.GoveeDeviceControllers[oldIp];
+            return this.updateControllerSettings(controller, controller.device.leds,
+                controller.device.type, controller.device.split, newIp);
         }
+        return false;
+    }
+
+    this.updateControllerSettings = function(controller, leds, type, split, ip)
+    {
+        if (this.getIPv4(ip) !== ip) return false;
+        if (!Number.isInteger(Number(leds)) || Number(leds) < 1 ||
+            ![1,2,3,4,5].includes(Number(type)) || ![1,2,3,4].includes(Number(split))) return false;
+        const oldIp = controller.device.ip;
+        const occupied = this.GoveeDeviceControllers[ip];
+        if (occupied && occupied !== controller)
+        {
+            service.log(`Cannot move ${oldIp} to ${ip}: another saved controller uses that address`);
+            return false;
+        }
+        if (this.GoveeDeviceControllers[oldIp] !== controller) return false;
+
+        // Remove by the OLD service identifier before changing either index.
+        service.removeController(controller);
+        delete this.GoveeDeviceControllers[oldIp];
+        if (controller.udpSocket) controller.udpSocket.close();
+
+        const data = controller.device.toCacheJSON();
+        data.sku = controller.device.sku;
+        data.bleVersionSoft = controller.device.firmware;
+        // Keep the endpoint identifier so enablement, Canvas position and other
+        // SignalRGB device settings remain attached across DHCP address changes.
+        data.controllerId = controller.id;
+        data.ip = ip;
+        data.leds = parseInt(leds);
+        data.type = parseInt(type);
+        data.split = parseInt(split);
+        // A new local relay port avoids racing the old renderer's socket close.
+        data.uniquePort = this.getUniquePort();
+        if (data.name === controller.device.generateName()) delete data.name;
+        const device = new GoveeDevice(data);
+        device.save();
+        const replacement = this.createController(device.toCacheJSON());
+        this.GoveeDeviceControllers[ip] = replacement;
+        this.saveCache();
+        service.addController(replacement);
+        service.announceController(replacement);
+        return true;
     }
 
     this.saveCache = function()
@@ -207,7 +294,7 @@ export function DiscoveryService()
         for(let ip of Object.keys(this.GoveeDeviceControllers))
         {
             let goveeController = this.GoveeDeviceControllers[ip];
-            ipCache[goveeController.id] = goveeController.toCacheJSON();
+            ipCache[goveeController.device.ip] = goveeController.toCacheJSON();
         }
 
         service.saveSetting('ipCache', 'cache', JSON.stringify(ipCache));
@@ -215,9 +302,13 @@ export function DiscoveryService()
 
     this.removeController = function(ip)
     {
-        let goveeController = this.GoveeDeviceControllers[ip];
+        // The UI passes the stable controller ID, which can be a former IP.
+        let goveeController = this.GoveeDeviceControllers[ip] ||
+            Object.values(this.GoveeDeviceControllers).find(controller => controller.id === ip);
+        if (!goveeController) return;
         service.removeController(goveeController);
-        delete this.GoveeDeviceControllers[ip];
+        if (goveeController.udpSocket) goveeController.udpSocket.close();
+        delete this.GoveeDeviceControllers[goveeController.device.ip];
     }
 
     this.getUniquePort = function()
@@ -260,6 +351,9 @@ export function DiscoveryService()
 
         // Create and store controller for network tab
         let goveeController = new GoveeController(goveeDevice);
+        // A callback avoids putting a circular discovery object in controller data.
+        goveeController.applySettings = (leds, type, split, ip) =>
+            this.updateControllerSettings(goveeController, leds, type, split, ip);
 
         // Start the udp socket?
         goveeController.setupUDPSocket();

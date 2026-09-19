@@ -1,6 +1,14 @@
 # Govee Direct Connect
 
-[![Click here to add this repo to SignalRGB](https://raw.githubusercontent.com/SRGBmods/QMK-Images/main/images/add-to-signalrgb.png)](https://srgbmods.net/s?p=addon/install?url=https://github.com/fu-raz/signalrgb-govee-direct-connect)
+[![Click here to add this repo to SignalRGB](https://raw.githubusercontent.com/SRGBmods/QMK-Images/main/images/add-to-signalrgb.png)](https://srgbmods.net/s?p=addon/install?url=https://github.com/Fefedu973/signalrgb-govee-direct-connect)
+
+## IP recovery fork
+
+This fork adds automatic recovery when a previously configured device receives a new LAN address. It preserves the existing SignalRGB controller identity so enablement and Canvas placement can remain attached to the device. It also fixes the manual IP update path.
+
+Install this fork through the button above or add `https://github.com/Fefedu973/signalrgb-govee-direct-connect` in SignalRGB Add-ons. Disable the original Govee Direct Connect addon before restarting so only one discovery service owns UDP port 4002. Existing saved devices are reused through the unchanged service name.
+
+The patch uses standard LAN discovery. It does not remove firmware color transitions, introduce a new bulb protocol, or claim support for additional hardware. See [the implementation and validation notes](IP-RECOVERY.md).
 
 ## Getting started
 This SignalRGB Addon allows you to add Govee devices via a direct IP connection. You control the amount of leds of the device and what protocol is used to communicate with the device. You can even use components to build your exact Govee Glide setup.

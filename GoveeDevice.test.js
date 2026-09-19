@@ -31,6 +31,7 @@ export default class GoveeDevice
         {
             this.id = (data.hasOwnProperty('id')) ? data.id : null;
             this.ip = data.ip;
+            this.controllerId = data.controllerId || data.ip;
             this.leds = parseInt(data.leds);
             this.type = parseInt(data.type);
             this.split = data.split ? parseInt(data.split) : 1;
@@ -153,6 +154,7 @@ export default class GoveeDevice
         {
             // Create a new setting specifically for that device
             service.saveSetting(this.id, 'ip', this.ip);
+            service.saveSetting(this.id, 'controllerId', this.controllerId);
             service.saveSetting(this.id, 'leds', this.leds);
             service.saveSetting(this.id, 'type', this.type);
             service.saveSetting(this.id, 'split', this.split);
@@ -187,6 +189,7 @@ export default class GoveeDevice
         return {
             id: this.id,
             ip: this.ip,
+            controllerId: this.controllerId,
             name: this.name,
             leds: this.leds,
             type: this.type,
@@ -199,6 +202,7 @@ export default class GoveeDevice
     {
         this.id         = id;
         this.ip         = service.getSetting(id, 'ip');
+        this.controllerId = service.getSetting(id, 'controllerId') || this.ip;
         this.leds       = service.getSetting(id, 'leds');
         this.type       = service.getSetting(id, 'type');
         this.split      = service.getSetting(id, 'split');
