@@ -22,7 +22,21 @@ The separate [Govee Bluetooth Only client](BLE-ONLY.md) discovers allowlisted, s
 
 Read the [companion setup instructions](ble-companion/README.md) before enabling a Bluetooth controller. No real Bluetooth addresses, communication keys or private configuration are included in this repository. Keep those in a separate local configuration. The [backend extension guide](ble-companion/EXTENDING.md) and [client architecture notes](BLE-ONLY.md#architecture-and-adding-a-profile) explain how to add a proven compatible profile without another JavaScript model list; a new protocol family may require backend code and hardware validation.
 
-## Getting started
+## Durable Windows companion installation
+
+Use a permanent checkout for the Bluetooth companion. With Python 3.13 x64, create a virtual environment at the repository root and install the tested Windows dependency lock:
+
+```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r ble-companion/requirements-windows-py313.lock.txt
+```
+
+Keep the personal configuration outside the repository at `%LOCALAPPDATA%\GoveeBleBridge\config.local.json`; follow the [companion guide](ble-companion/README.md) for configuration and supported profiles. Do not carry forward a `python_libs` override pointing to an older dependency directory when using this virtual environment. `Lancer-pont.cmd` starts this checkout with its local virtual environment, and `Arreter-pont.cmd` requests a clean shutdown.
+
+For automatic startup at Windows sign-in, use the shared [SignalRGB Local Bridges supervisor](https://github.com/Fefedu973/SignalRGB-Local-Bridges/tree/main/startup). It supplies the private configuration and Python paths explicitly, checks for existing bridge processes and retries with backoff. The SignalRGB addon and the companion are separate installations: updating the addon alone does not update this checkout.
+
+## LAN setup
+
 This SignalRGB Addon allows you to add Govee devices via a direct IP connection. You control the amount of leds of the device and what protocol is used to communicate with the device. You can even use components to build your exact Govee Glide setup.
 
 You should make sure your device is connected to your wifi via the app, you have refreshed the light segments and have turned on LAN Control. It works best if the device has an assigned IP by reserving an IP in your router.
