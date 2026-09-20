@@ -353,7 +353,13 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
     async def transport(self,wrong_identity=False):
         session=bytes(range(16,32));writes=[];notifications=[]
         class Client:
-            def __init__(self,*a,**k):self.is_connected=False
+            def __init__(self,*a,**k):
+                from protocol import SERVICE, NOTIFY, WRITE
+                self.is_connected=False
+                service=types.SimpleNamespace(characteristics=[
+                    types.SimpleNamespace(uuid=NOTIFY,properties=['notify']),
+                    types.SimpleNamespace(uuid=WRITE,properties=['write-without-response'])])
+                self.services=types.SimpleNamespace(get_service=lambda uuid:service if uuid==SERVICE else None)
             async def connect(self):self.is_connected=True
             async def disconnect(self):self.is_connected=False
             async def start_notify(self,uuid,callback):self.callback=callback

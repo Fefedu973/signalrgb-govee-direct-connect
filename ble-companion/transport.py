@@ -2,7 +2,7 @@
 import asyncio
 import sys
 import time
-from protocol import NOTIFY, WRITE, crypt, handshake, packet, valid
+from protocol import SERVICE, NOTIFY, WRITE, crypt, handshake, packet, valid
 
 class Discovery:
     def __init__(self,allowlisted_addresses=(),windows_direct=False):
@@ -52,6 +52,7 @@ class BleTransport:
         self.discovery = discovery
         self.client = None
         self.session_key = None
+        self._notifying = False
         self.queue = asyncio.Queue(maxsize=64)
         self.query_lock = asyncio.Lock()
 
@@ -67,10 +68,33 @@ class BleTransport:
     async def connect(self):
         from bleak import BleakClient
         found = await self.discovery.find(self.device['ble_address'])
-        self.client = BleakClient(found, timeout=10)
+        # A new BleakClient can still reuse an incomplete Windows GATT cache.
+        # Rediscover services AND characteristics from the device on reconnect.
+        self.client = BleakClient(found, timeout=10,
+                                  winrt={'use_cached_services': False})
+        self._notifying = False
+        self.session_key = None
+        while not self.queue.empty():
+            self.queue.get_nowait()
         try:
             await self.client.connect()
+            service = self.client.services.get_service(SERVICE)
+            chars = {} if service is None else {c.uuid.lower(): c for c in service.characteristics}
+            missing = []
+            if service is None:
+                missing.append('service')
+            if NOTIFY not in chars:
+                missing.append('notify')
+            elif not set(chars[NOTIFY].properties).intersection({'notify', 'indicate'}):
+                missing.append('notify property')
+            if WRITE not in chars:
+                missing.append('write')
+            elif 'write-without-response' not in chars[WRITE].properties:
+                missing.append('write-without-response property')
+            if missing:
+                raise ConnectionError('H6008 GATT discovery incomplete (uncached): missing ' + ', '.join(missing))
             await self.client.start_notify(NOTIFY, self.notification)
+            self._notifying = True
             # A freshly enabled subscription can lose the first response on
             # Windows. Retry the key request once on the SAME connection;
             # reconnecting immediately can repeat that first-packet loss.
@@ -91,7 +115,11 @@ class BleTransport:
             if identity[2:8] != expected:
                 raise ValueError('AA14 identity does not match the authorized bulb')
         except BaseException:
-            await self.disconnect()
+            try:
+                await self.disconnect()
+            except Exception:
+                # A cleanup failure must not replace the discovery/auth error.
+                pass
             raise
 
     async def _send(self, plain, key):
@@ -130,10 +158,11 @@ class BleTransport:
 
     async def disconnect(self):
         client, self.client = self.client, None
+        notifying, self._notifying = self._notifying, False
         self.session_key = None
         if client is not None:
             try:
-                if client.is_connected:
-                    await client.stop_notify(NOTIFY)
+                if client.is_connected and notifying:
+                    await asyncio.wait_for(client.stop_notify(NOTIFY), 2)
             finally:
                 await asyncio.wait_for(client.disconnect(),2)

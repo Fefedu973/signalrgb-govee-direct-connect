@@ -46,6 +46,33 @@ Tests: `python -B -m unittest discover -p "test_*.py" -v` (no real lights).
 
 ## H6008-specific protocol and behavior
 
+### Recovery from missing Windows GATT characteristics
+
+The 20 September afternoon fix forces `winrt={"use_cached_services": false}`
+for H6008 connections. A new client otherwise can reuse the Windows attribute
+cache; the [Bleak WinRT documentation](https://bleak.readthedocs.io/en/latest/api/args.html#bleak.args.winrt.WinRTClientArgs.use_cached_services)
+defines `false` as reading that database from the remote device. The transport
+validates the expected service, notification characteristic, control
+characteristic and their properties before beginning E7 authentication.
+
+Cleanup previously called `stop_notify` even when subscription had failed.
+That could replace the original error with `Characteristic ...2b10 was not
+found!`, obscuring why the connection failed. Cleanup now only unsubscribes
+after a successful subscription, always attempts to disconnect, and preserves
+the original connection/authentication exception. Old queued notifications
+are discarded before beginning a new session.
+
+Two H6008s were observed stuck on this error while the third and H6159 still
+worked. After a clean companion-only reload, all three H6008s resumed streaming
+without an error; H6159 also resumed and later confirmed its normal blackout
+state. The regression suite passes **110 tests**, including seven GATT/cleanup
+tests. See [the validation record](validation/gatt-recovery-20260920.json).
+An incomplete Windows cache remains a likely explanation, not a proven root
+cause: the former cleanup could mask the first exception and the recovery
+also restarted the companion. This short observation does not establish
+hours-long reliability. No LAN-color fallback, radio reset, firmware change
+or retry-limit increase was introduced.
+
 ### Recovery after a PC restart
 
 A bulb can remain in realtime mode `05` while a Windows restart discards the

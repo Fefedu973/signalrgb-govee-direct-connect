@@ -1,0 +1,40 @@
+{
+  "date": "2026-09-20",
+  "release": "2026.09.20.1",
+  "before": {
+    "h6008_affected": 2,
+    "h6008_still_ready": 1,
+    "h6159_ready": true,
+    "error": "Characteristic 00010203-0405-0607-0809-0a0b0c0d2b10 was not found!",
+    "supplied_log_range_local": ["15:04:36", "15:58:00"],
+    "supplied_last_failure_counter": 112
+  },
+  "changes": [
+    "H6008 connections force uncached Windows GATT discovery.",
+    "Expected service, characteristics and properties are checked before E7/AA14.",
+    "Cleanup does not unsubscribe if subscription failed and does not replace the original error.",
+    "Old notifications cannot seed a new authentication session."
+  ],
+  "tests": {"python_passed": 110, "python_failed": 0, "new_gatt_tests": 7},
+  "live": {
+    "companion_restarted_utc": "2026-09-20T14:01:49.4516868Z",
+    "all_four_streaming_observed_utc": "2026-09-20T14:02:24.394095+00:00",
+    "last_check_utc": "2026-09-20T14:03:30.332590+00:00",
+    "h6008_states": ["streaming", "streaming", "streaming"],
+    "h6008_frame_writes": [10, 9, 7],
+    "h6008_errors": [null, null, null],
+    "h6159_state": "blackout",
+    "h6159_ready": true,
+    "h6159_error": null,
+    "nvidia_streaming": true,
+    "streamdeck_ready": true,
+    "streamdeck_painted_keys": 15,
+    "streamdeck_errors": 0
+  },
+  "limits": [
+    "A stale/incomplete Windows cache is suspected, not independently proven; the previous cleanup could mask the original failure.",
+    "The companion was also restarted during the recovery, so the observation does not isolate the cache option's effect.",
+    "No hours-long stability claim or new optical anti-fade test is made.",
+    "No Windows/SignalRGB restart, Bluetooth adapter reset or firmware modification was required."
+  ]
+}

@@ -16,6 +16,8 @@ An optional **H6008 BLE realtime bridge** setting routes H6008 single-color devi
 
 While enabled, a companion outage holds the last color, shows an alert and retries automatically every 30 seconds. It does not silently resume fading LAN colors. Disable the option explicitly to restore LAN rendering. The device page shows the active transport and local request/reply counters.
 
+The **2026.09.20.1** companion update refreshes the H6008 Windows GATT database on reconnect, checks its characteristics before authentication and preserves the initial error when cleanup also fails. This addresses the repeated `Characteristic ...2b10 was not found!` failure; see the [recovery details and validation limits](ble-companion/README.md#recovery-from-missing-windows-gatt-characteristics). Update and cleanly restart the separately installed companion to load this change.
+
 ## Bluetooth-only client and companion profiles
 
 The separate [Govee Bluetooth Only client](BLE-ONLY.md) discovers allowlisted, single-zone RGB profiles from the same local companion. Its initial classic profile targets H6159 and retains normal device transitions; it does not enable the H6008 realtime protocol. Only profiles explicitly declared by the backend are accepted. Addressable/multi-zone devices and unverified models are not covered by this client.

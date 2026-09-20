@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from protocol import NOTIFY, WRITE, crypt, packet, realtime, valid
+from protocol import SERVICE, NOTIFY, WRITE, crypt, packet, realtime, valid
 from transport import BleTransport
 
 
@@ -52,6 +52,10 @@ class FakeClient:
         self.connect_count = self.disconnect_count = self.stop_notify_count = 0
         self.writes = []
         self.e702_acknowledged = False
+        service = SimpleNamespace(characteristics=[
+            SimpleNamespace(uuid=NOTIFY, properties=['notify']),
+            SimpleNamespace(uuid=WRITE, properties=['write-without-response'])])
+        self.services = SimpleNamespace(get_service=lambda uuid: service if uuid == SERVICE else None)
 
     async def connect(self):
         self.connect_count += 1
