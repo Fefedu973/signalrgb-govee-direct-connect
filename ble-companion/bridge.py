@@ -71,6 +71,9 @@ class BulbSession:
         self.clock = clock
         self.transport = None
         self.snapshot = None
+        self.recovery_pending = None
+        self.recovery_baseline = None
+        self.last_mode_hex = None
         self.initialized = False
         self.modified = False
         self.requested = False
@@ -140,6 +143,9 @@ class BulbSession:
                 'power':self.power, 'initial_state':None if self.snapshot is None else {
                     'mode_hex':self.snapshot['mode'].hex(), 'power':self.snapshot['power'],
                     'brightness':self.snapshot['brightness']},
+                'last_mode_hex':self.last_mode_hex,
+                'recovery_baseline':self.recovery_baseline,
+                'recovery_pending':self.recovery_pending is not None,
                 'frame_writes':self.frame_writes,
                 'last_write_monotonic':None if not self.frame_history else self.frame_history[-1][1],
                 'lease_remaining_ms':max(0, round((self.deadline-self.clock())*1000)) if self.requested else 0}
@@ -154,6 +160,7 @@ class BulbSession:
         restored = self.final_rgb is None and (not self.modified or not self.restore_on_release)
         handoff = self.final_rgb is None and not self.restore_on_release
         final_rgb = self.final_rgb
+        baseline = self.snapshot if self.snapshot is not None else self.recovery_pending
         try:
             if final_rgb is not None:
                 if self.transport is None or not self.transport.connected:
@@ -165,7 +172,7 @@ class BulbSession:
                     await asyncio.wait_for(self.transport.connect(),10)
                 await self.transport.send(normal(final_rgb))
                 restored = True
-            elif self.modified and self.snapshot is not None and self.restore_on_release:
+            elif self.modified and baseline is not None and self.restore_on_release:
                 if self.transport is None or not self.transport.connected:
                     if not self.restore_explicit:
                         raise ConnectionError('Lease expired without BLE; no late restoration reconnect')
@@ -174,7 +181,7 @@ class BulbSession:
                     self.transport = self.factory(self.device)
                     await asyncio.wait_for(self.transport.connect(),10)
                 # Never restore power/brightness: LAN owns those controls.
-                await self.transport.send(packet(0x33, 5, self.snapshot['mode'][2:19]))
+                await self.transport.send(packet(0x33, 5, baseline['mode'][2:19]))
                 restored = True
         except Exception as ex:
             self.restore_error = str(ex)
@@ -190,6 +197,7 @@ class BulbSession:
             self.last_sent = None
             if restored and not handoff:
                 self.snapshot = None
+                self.recovery_pending = None
                 self.modified = False
             self.releasing = False
             if revision == self.release_revision:
@@ -226,15 +234,50 @@ class BulbSession:
                     raise ValueError('Unrecognized power state')
                 self.last_power_at = self.clock()
                 mode = await self.transport.query(5, b'\x01')
+                self.last_mode_hex = mode.hex()
                 # A previous restore:false handoff may retain our old mode05.
                 # If LAN set a new static color, refresh that snapshot instead.
                 if mode[2] not in (5,13):
                     raise ValueError('Current mode is not a known static/realtime RGB mode')
+                if self.snapshot is None and mode[2] == 5:
+                    if self.desired is None:
+                        raise ValueError('Orphan realtime mode requires an explicitly requested RGB color')
+                    recovery_rgb = self.desired
+                    brightness = await self.transport.query(4)
+                    if not self.active():
+                        await self.release(); return
+                    # A reboot loses the old static snapshot. Establish only the
+                    # explicitly requested RGB as a NEW base; never invent the
+                    # color that existed before the reboot. Keep this provisional
+                    # base across cancellation between the write and its readback.
+                    recovery_command = normal(recovery_rgb)
+                    self.recovery_pending = {
+                        'mode':packet(0xaa, 5, recovery_command[2:19]),
+                        'power':self.power, 'brightness':brightness[2]}
+                    self.recovery_baseline = 'requested_rgb_after_orphan_realtime'
+                    self.modified = True
+                    await self.transport.send(recovery_command)
+                    if not self.active():
+                        await self.release(); return
+                    mode = await self.transport.query(5, b'\x01')
+                    self.last_mode_hex = mode.hex()
+                    if mode[2] != 13 or tuple(mode[3:6]) != recovery_rgb or mode[6:8] != b'\0\0':
+                        raise ValueError('Recovery RGB baseline readback does not match the requested static color')
+                    self.snapshot = {'mode':mode, 'power':self.power, 'brightness':brightness[2]}
+                    self.recovery_pending = None
+                    self.modified = False
+                    self.new_acquisition = False
                 if self.snapshot is None or (self.new_acquisition and mode[2] == 13):
-                    if mode[2] != 13 or mode[6:8] != b'\0\0':
-                        raise ValueError('Initial mode is not a restorable static RGB color')
+                    if mode[2] != 13:
+                        raise ValueError('Initial mode is not a restorable static RGB color: mode=' +
+                                         format(mode[2], '02x') + ', temperature=' +
+                                         str(int.from_bytes(mode[6:8], 'big')))
+                    # AA05 mode0D includes both RGB and white-temperature state.
+                    # Preserve its entire payload for release, including Kelvin;
+                    # requiring Kelvin=0 rejects a bulb left at ordinary white.
                     brightness = await self.transport.query(4)
                     self.snapshot = {'mode':mode, 'power':self.power, 'brightness':brightness[2]}
+                    self.recovery_pending = None
                     self.modified = False
                 self.new_acquisition = False
                 self.state = 'ready'

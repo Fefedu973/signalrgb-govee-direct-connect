@@ -1,0 +1,49 @@
+{
+  "date": "2026-09-20",
+  "hardware": "Three H6008 and one H6159",
+  "python_tests": 103,
+  "scope": "Windows logon succeeded; H6008 recovery from orphan realtime mode and static 6500 K",
+  "snapshot": {
+    "elapsed": 54.05,
+    "devices": [
+      {
+        "state": "streaming",
+        "ready": true,
+        "error": null,
+        "restore_error": null,
+        "frame_writes": 1,
+        "last_mode_hex": "aa050d00000000000000000000000000000000a2",
+        "recovery_baseline": null
+      },
+      {
+        "state": "streaming",
+        "ready": true,
+        "error": null,
+        "restore_error": null,
+        "frame_writes": 1,
+        "last_mode_hex": "aa050d00000019640000000000000000000000df",
+        "recovery_baseline": null
+      },
+      {
+        "state": "streaming",
+        "ready": true,
+        "error": null,
+        "restore_error": null,
+        "frame_writes": 1,
+        "last_mode_hex": "aa050d00000000000000000000000000000000a2",
+        "recovery_baseline": null
+      },
+      {
+        "state": "blackout",
+        "ready": true,
+        "error": null,
+        "restore_error": null,
+        "frame_writes": 0,
+        "last_mode_hex": null,
+        "recovery_baseline": null
+      }
+    ]
+  },
+  "pre_reboot_color_recovered": false,
+  "firmware_modified": false
+}

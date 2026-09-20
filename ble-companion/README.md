@@ -46,6 +46,35 @@ Tests: `python -B -m unittest discover -p "test_*.py" -v` (no real lights).
 
 ## H6008-specific protocol and behavior
 
+### Recovery after a PC restart
+
+A bulb can remain in realtime mode `05` while a Windows restart discards the
+companion's in-memory static-color snapshot. Older versions refused this state,
+so the addon retried without ever becoming ready. An explicit acquisition with
+an RGB color now establishes that requested color as a **new** static `0D`
+baseline, verifies it through authenticated `AA05` readback, and then enters
+realtime mode again. This does not recover or claim to restore the color from
+before the PC reboot. Release restores the newly verified baseline; power and
+brightness remain under LAN control.
+
+This recovery requires a verified `AA14` identity and an explicitly requested
+RGB. Ordinary mode `0D` also accepts white-temperature settings: its complete
+authenticated payload, including Kelvin, is preserved for release. The original
+RGB-only guard incorrectly rejected the observed 6500 K state. Unknown scenes
+remain rejected.
+A release or expired lease during the transition prevents realtime activation.
+The status exposes `last_mode_hex`, `recovery_baseline` and `recovery_pending`
+without exposing authentication keys.
+
+The transport also retries a missing initial `E701` reply once on the same BLE
+connection before reconnecting. Timeout messages identify the expected reply
+instead of returning an empty error. This is bounded retry of authentication,
+not a LAN-color fallback or a firmware change.
+
+The 20 September regression tests cover loss of the first authentication reply,
+wrong identity, a fresh process finding mode `05`, readback mismatch, lease expiry
+and explicit release during recovery. Run the full Python test suite as above.
+
 The following sections describe the H6008 worker. Its authentication, LAN power
 ownership and anti-fade initialization do not apply to the classic H6159 worker.
 

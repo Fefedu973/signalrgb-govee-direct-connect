@@ -71,8 +71,17 @@ class BleTransport:
         try:
             await self.client.connect()
             await self.client.start_notify(NOTIFY, self.notification)
-            await self._send(handshake(1), self.key)
-            reply = await self._receive(b'\xe7\x01', self.key)
+            # A freshly enabled subscription can lose the first response on
+            # Windows. Retry the key request once on the SAME connection;
+            # reconnecting immediately can repeat that first-packet loss.
+            for attempt in range(2):
+                await self._send(handshake(1), self.key)
+                try:
+                    reply = await self._receive(b'\xe7\x01', self.key)
+                    break
+                except TimeoutError:
+                    if attempt:
+                        raise
             candidate = reply[2:18]
             await self._send(handshake(2), self.key)
             await self._receive(b'\xe7\x02', self.key)
@@ -96,7 +105,10 @@ class BleTransport:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise TimeoutError('Expected BLE reply not received: ' + prefix.hex())
-            raw = await asyncio.wait_for(self.queue.get(), remaining)
+            try:
+                raw = await asyncio.wait_for(self.queue.get(), remaining)
+            except TimeoutError as error:
+                raise TimeoutError('Expected BLE reply not received: ' + prefix.hex()) from error
             if len(raw) != 20:
                 continue
             plain = crypt(raw, key, decrypt=True)

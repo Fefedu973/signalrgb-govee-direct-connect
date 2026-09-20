@@ -44,6 +44,85 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         session=BulbSession(DEVICE,lambda d:FakeTransport(bulb,**kwargs),clock=clock)
         return session,bulb,clock
 
+    async def test_cold_restart_orphan_realtime_establishes_requested_not_preboot_baseline(self):
+        s,b,c=self.make();b.mode=packet(0xaa,5,realtime((70,80,90))[2:19])
+        target=(1,2,3);baseline=packet(0xaa,5,normal(target)[2:19])
+        s.acquire(target);await s.step()
+        self.assertEqual(b.writes,[normal(target),start_realtime(),realtime(target)])
+        self.assertEqual(s.snapshot['mode'],baseline)
+        self.assertEqual(s.status()['last_mode_hex'],baseline.hex())
+        self.assertEqual(s.status()['recovery_baseline'],'requested_rgb_after_orphan_realtime')
+        self.assertFalse(s.status()['recovery_pending'])
+        s.transport.connected=False;c.value=.2;s.acquire((8,9,10));await s.step()
+        self.assertEqual(b.writes.count(normal(target)),1)
+        self.assertEqual(s.snapshot['mode'],baseline)
+        s.request_release();await s.step()
+        self.assertEqual(b.mode,baseline)
+        self.assertNotEqual(b.mode,b.initial)
+        self.assertEqual((b.power,b.brightness),(1,60))
+
+    async def test_orphan_without_rgb_and_unknown_scene_are_still_refused(self):
+        for mode,rgb in ((packet(0xaa,5,b'\x05\x01'),None),
+                         (packet(0xaa,5,b'\x04\x01'),(1,2,3))):
+            s,b,c=self.make();b.mode=mode;s.acquire(rgb);await s.step()
+            self.assertFalse(b.writes)
+            self.assertIsNone(s.snapshot)
+            self.assertEqual(s.status()['last_mode_hex'],mode.hex())
+            self.assertTrue(s.error)
+
+    async def test_orphan_recovery_mismatch_never_enters_realtime(self):
+        b=PhysicalBulb();b.mode=packet(0xaa,5,b'\x05\x01')
+        class Mismatch(FakeTransport):
+            async def query(self,command,payload=b''):
+                if command==5 and self.bulb.writes:
+                    return packet(0xaa,5,normal((9,9,9))[2:19])
+                return await super().query(command,payload)
+        s=BulbSession(DEVICE,lambda d:Mismatch(b));s.acquire((1,2,3));await s.step()
+        self.assertEqual(b.writes,[normal((1,2,3))])
+        self.assertIsNone(s.snapshot)
+        self.assertTrue(s.status()['recovery_pending'])
+        self.assertIn('readback',s.error)
+        self.assertEqual(s.last_mode_hex,packet(0xaa,5,normal((9,9,9))[2:19]).hex())
+
+    async def test_lease_expiring_before_orphan_baseline_write_sends_nothing(self):
+        b=PhysicalBulb();b.mode=packet(0xaa,5,b'\x05\x01');clock=Clock()
+        class Expiring(FakeTransport):
+            async def query(self,command,payload=b''):
+                result=await super().query(command,payload)
+                if command==4:clock.value=3
+                return result
+        s=BulbSession(DEVICE,lambda d:Expiring(b),clock=clock);s.acquire((1,2,3));await s.step()
+        self.assertFalse(b.writes)
+        self.assertIsNone(s.recovery_pending)
+        self.assertEqual(s.state,'idle')
+
+    async def test_release_or_expiry_during_recovery_readback_preserves_new_color(self):
+        for expiry in (False,True):
+            with self.subTest(expiry=expiry):
+                b=PhysicalBulb();b.mode=packet(0xaa,5,b'\x05\x01');clock=Clock();readback=asyncio.Event()
+                class Slow(FakeTransport):
+                    async def query(self,command,payload=b''):
+                        if command==5 and self.bulb.writes:
+                            readback.set();await asyncio.Event().wait()
+                        return await super().query(command,payload)
+                s=BulbSession(DEVICE,lambda d:Slow(b),clock=clock);s.acquire((1,2,3))
+                task=asyncio.create_task(s.run())
+                try:
+                    await asyncio.wait_for(readback.wait(),.5)
+                    self.assertIsNone(s.snapshot)
+                    self.assertTrue(s.status()['recovery_pending'])
+                    if expiry:clock.value=3
+                    else:s.request_release()
+                    await asyncio.wait_for(s.released.wait(),.5)
+                    self.assertTrue(all(value==normal((1,2,3)) for value in b.writes))
+                    self.assertEqual(b.mode,packet(0xaa,5,normal((1,2,3))[2:19]))
+                    self.assertEqual(s.state,'idle')
+                    self.assertIsNone(s.restore_error)
+                    self.assertEqual((b.power,b.brightness),(1,60))
+                finally:
+                    s.stopping=True
+                    await asyncio.wait_for(task,.5)
+
     async def test_latest_frame_coalescing_and_cadence(self):
         s,b,c=self.make();s.acquire((1,2,3));await s.step()
         self.assertEqual(b.writes,[start_realtime(),realtime((1,2,3))])
@@ -77,6 +156,18 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(b.connections,3)
         self.assertEqual(s.state,'failed')
         self.assertFalse(b.writes)
+
+    async def test_white_6500k_snapshot_is_restored_byte_for_byte(self):
+        s,b,c=self.make()
+        original=packet(0xaa,5,bytes([13,0,0,0,0x19,0x64]))
+        b.mode=original
+        s.acquire((20,30,40));await s.step()
+        self.assertTrue(s.status()['ready'])
+        self.assertEqual(s.snapshot['mode'],original)
+        self.assertEqual(b.writes,[start_realtime(),realtime((20,30,40))])
+        s.request_release();await s.step()
+        self.assertEqual(b.mode,original)
+        self.assertEqual((b.power,b.brightness),(1,60))
 
     async def test_expiry_restores_only_color(self):
         s,b,c=self.make();s.acquire((1,2,3));await s.step()
@@ -234,6 +325,31 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(s.restore_error)
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_notification_queue_reports_expected_prefix_without_key(self):
+        real_wait_for = asyncio.wait_for
+        async def short_wait(awaitable, timeout):
+            return await real_wait_for(awaitable, min(timeout, .01))
+        for prefix in (b'\xe7\x01', b'\xe7\x02', b'\xaa\x14', b'\xaa\x01', b'\xaa\x05'):
+            with self.subTest(prefix=prefix.hex()):
+                transport = BleTransport(DEVICE, KEY, None)
+                with patch('transport.asyncio.wait_for', short_wait):
+                    with self.assertRaises(TimeoutError) as raised:
+                        await transport._receive(prefix, KEY)
+                self.assertEqual(str(raised.exception), 'Expected BLE reply not received: ' + prefix.hex())
+                self.assertNotIn(KEY.hex(), str(raised.exception))
+
+    async def test_invalid_notifications_are_ignored_until_matching_checked_reply(self):
+        transport = BleTransport(DEVICE, KEY, None)
+        expected = packet(0xaa, 5, b'\x0d\x01\x02\x03')
+        corrupt = bytearray(expected); corrupt[-1] ^= 1
+        transport.notification(None, b'short notification')
+        transport.notification(None, crypt(bytes(corrupt), KEY))
+        transport.notification(None, crypt(packet(0xaa, 4, b'\x64'), KEY))
+        transport.notification(None, crypt(expected, KEY))
+        reply = await transport._receive(b'\xaa\x05', KEY)
+        self.assertEqual(reply, expected)
+        self.assertTrue(transport.queue.empty())
+
     async def transport(self,wrong_identity=False):
         session=bytes(range(16,32));writes=[];notifications=[]
         class Client:
