@@ -1,0 +1,59 @@
+{
+  "date": "2026-09-24",
+  "release": "2026.09.24",
+  "initial_observation": {
+    "utc": "2026-09-24T19:38:25.794150+00:00",
+    "api_responsive": true,
+    "h6008_states": ["connecting", "paused_off", "connecting"],
+    "h6008_frame_writes": [2, 2, 1],
+    "h6159_state": "releasing",
+    "h6159_frame_writes": 0,
+    "lease_expired_on_stuck_devices": true,
+    "signalrgb_logs": "Repeated acquisition timeouts; earlier H6008 missing-service errors persisted despite uncached discovery."
+  },
+  "reproduction": {
+    "baseline_commit": "30a98e6",
+    "file": "test_worker_lifecycle.py",
+    "test_methods": 4,
+    "families_exercised": ["h6008", "classic"],
+    "baseline_failures": 5,
+    "baseline_errors": 2,
+    "reproduced_bugs": [
+      "Renewed lease while a cancelled operation unwinds can permanently stop its device worker.",
+      "Repeated cancellation interrupts child cleanup.",
+      "External worker cancellation can lose the child reference before draining it."
+    ]
+  },
+  "validation": {
+    "python_tests_passed": 122,
+    "python_tests_failed": 0,
+    "new_lifecycle_tests": 4,
+    "new_worker_health_tests": 8,
+    "tests_use_physical_bluetooth": false,
+    "final_companion_started_utc": "2026-09-24T19:46:14.6419817Z",
+    "last_observation_utc": "2026-09-24T19:46:56.373059+00:00",
+    "h6008_states": ["streaming", "streaming", "streaming"],
+    "h6008_ready": [true, true, true],
+    "h6008_errors": [null, null, null],
+    "h6159_state": "blackout",
+    "h6159_ready": true,
+    "h6159_error": null,
+    "h6159_initial_connection_timeouts_recovered": 1,
+    "user_confirmed_devices_follow_signalrgb_again": true,
+    "workers_alive": [true, true, true, true],
+    "worker_errors": [null, null, null, null],
+    "restore_errors": [null, null, null, null]
+  },
+  "recovery_policy": {
+    "health_check_interval_ms": 100,
+    "maximum_operation_seconds": 30,
+    "fatal_action": "Orderly companion exit; the existing Windows supervisor restarts the process.",
+    "does_not_restart_for": ["idle", "blackout", "paused_off"]
+  },
+  "limits": [
+    "The races are deterministically reproduced, but suspended task stacks from the original process were not recovered; their role in every preceding Bluetooth error is not established.",
+    "This short live observation does not establish hours-long Bluetooth stability.",
+    "An event loop or kernel operation that cannot respond to cancellation is outside the guaranteed recovery scope.",
+    "Only the Govee companion was reloaded. No SignalRGB/Windows restart, adapter reset, forced power-on or firmware change was performed."
+  ]
+}

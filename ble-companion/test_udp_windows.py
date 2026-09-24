@@ -47,6 +47,9 @@ class FakeBridge:
     def start(self):
         self.start_count += 1
 
+    def check_workers(self):
+        pass
+
     async def close(self):
         self.close_count += 1
 

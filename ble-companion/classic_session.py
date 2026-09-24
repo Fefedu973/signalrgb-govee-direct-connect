@@ -57,6 +57,7 @@ class ClassicSession:
         self.released.set()
         self.stopping = False
         self.operation_task = None
+        self.operation_started = None
         self.frame_writes = 0
         self.frame_history = deque(maxlen=256)
 
@@ -123,7 +124,8 @@ class ClassicSession:
         self.desired_brightness = None
         self.state = 'releasing'
         self.released.clear()
-        if not self.releasing and self.operation_task is not None and not self.operation_task.done():
+        if (not self.releasing and self.operation_task is not None and
+                not self.operation_task.done() and not self.operation_task.cancelling()):
             self.operation_task.cancel()
 
     def active(self):
@@ -482,22 +484,35 @@ class ClassicSession:
     async def run(self):
         try:
             while not self.stopping:
+                self.operation_started = time.monotonic()
                 self.operation_task = asyncio.create_task(self.step())
                 try:
                     while not self.operation_task.done():
                         await asyncio.wait({self.operation_task}, timeout=.05)
-                        if self.requested and not self.active() and not self.operation_task.done():
+                        if (self.requested and not self.active() and not self.operation_task.done()
+                                and not self.operation_task.cancelling()):
                             self.operation_task.cancel()
                     await self.operation_task
                 except asyncio.CancelledError:
-                    if self.active():
+                    if asyncio.current_task().cancelling():
                         raise
-                    await self.release()
+                    if not self.active():
+                        await self.release()
+                    else:
+                        # Do not reuse an incompletely initialized connection
+                        # just because its renewed lease is active again.
+                        await self._disconnect()
                 finally:
-                    self.operation_task = None
+                    if self.operation_task.done():
+                        self.operation_task = None
+                        self.operation_started = None
                 await asyncio.sleep(.02)
         finally:
+            self.stopping = True
             if self.operation_task is not None and not self.operation_task.done():
-                self.operation_task.cancel()
+                if not self.operation_task.cancelling():
+                    self.operation_task.cancel()
                 await asyncio.gather(self.operation_task, return_exceptions=True)
+            self.operation_task = None
+            self.operation_started = None
             await self.release()

@@ -18,6 +18,8 @@ While enabled, a companion outage holds the last color, shows an alert and retri
 
 The **2026.09.20.1** companion update refreshes the H6008 Windows GATT database on reconnect, checks its characteristics before authentication and preserves the initial error when cleanup also fails. This addresses the repeated `Characteristic ...2b10 was not found!` failure; see the [recovery details and validation limits](ble-companion/README.md#recovery-from-missing-windows-gatt-characteristics). Update and cleanly restart the separately installed companion to load this change.
 
+The **2026.09.24** companion update prevents an expired BLE operation from stopping its device worker when a new frame arrives during cancellation. It also detects dead workers or operations exceeding 30 seconds and shuts down cleanly for recovery by the Windows supervisor. See [session-worker recovery](ble-companion/README.md#session-worker-recovery-24-september). Updating only the SignalRGB addon does not update an external companion checkout.
+
 ## Bluetooth-only client and companion profiles
 
 The separate [Govee Bluetooth Only client](BLE-ONLY.md) discovers allowlisted, single-zone RGB profiles from the same local companion. Its initial classic profile targets H6159 and retains normal device transitions; it does not enable the H6008 realtime protocol. Only profiles explicitly declared by the backend are accepted. Addressable/multi-zone devices and unverified models are not covered by this client.

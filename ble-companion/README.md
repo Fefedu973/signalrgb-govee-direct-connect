@@ -46,6 +46,38 @@ Tests: `python -B -m unittest discover -p "test_*.py" -v` (no real lights).
 
 ## H6008-specific protocol and behavior
 
+### Session-worker recovery (24 September)
+
+The same serial-worker fix applies to H6008 and the classic H6159. Previously,
+an expired lease cancelled the current BLE operation. If a new frame renewed
+the lease while that operation was unwinding, the worker could mistake the
+child's cancellation for its own cancellation and stop permanently. The UDP
+server still replied, leaving a device stuck in `connecting` or `releasing`.
+Repeated cancellation every 50 ms could also interrupt Bluetooth cleanup.
+
+Workers now distinguish their own cancellation from cancellation of a child
+operation, cancel each pending operation only once, and drain it before cleanup.
+A renewed request survives; its connection is reinitialized and a restoration
+snapshot obtained before colors resume. H6008 now also rejects acquisition
+during an explicit release until cleanup finishes, as the classic session did.
+
+Status responses include `worker_alive`, `worker_error` and `operation_age_ms`.
+The server checks workers every 100 ms. Unexpected termination or an operation
+exceeding 30 seconds causes a diagnostic and orderly companion shutdown; the
+existing Windows supervisor can then restart the companion. Normal idle,
+blackout and deliberately powered-off devices do not count as worker failures.
+This checks asynchronous work; a completely frozen event loop or a kernel call
+that ignores cancellation is not guaranteed to recover within that deadline.
+
+The regression tests reproduce the cancellation races with in-memory transports
+on both families, including fresh-snapshot and shutdown-order checks. An
+already-running old process must be cleanly restarted to load the fix. A
+companion used without a process supervisor will exit on a fatal worker error
+and requires an external restart. This recovery does not enable LAN-color
+fallback, alter the device's power policy, reset the Bluetooth adapter or flash
+firmware. See `validation/worker-recovery-20260924.json` for actual observations
+and the distinction between reproduced bugs and the original live failure.
+
 ### Recovery from missing Windows GATT characteristics
 
 The 20 September afternoon fix forces `winrt={"use_cached_services": false}`

@@ -94,6 +94,7 @@ class BulbSession:
         self.released = asyncio.Event(); self.released.set()
         self.stopping = False
         self.operation_task = None
+        self.operation_started = None
         self.new_acquisition = True
         self.release_revision = 0
         self.releasing = False
@@ -101,6 +102,8 @@ class BulbSession:
         self.frame_history = deque(maxlen=256)
 
     def acquire(self, rgb=None):
+        if self.releasing or self.state == 'releasing':
+            raise RuntimeError('Release in progress; retry acquisition after its ACK')
         if not self.requested:
             self.new_acquisition = True
             self.failures = 0; self.next_retry = 0; self.error = None
@@ -127,8 +130,10 @@ class BulbSession:
         self.restore_explicit = True
         self.final_rgb = tuple(final_rgb) if final_rgb is not None else None
         self.desired = None
+        self.state = 'releasing'
         self.released.clear()
-        if not self.releasing and self.operation_task is not None and not self.operation_task.done():
+        if (not self.releasing and self.operation_task is not None and
+                not self.operation_task.done() and not self.operation_task.cancelling()):
             self.operation_task.cancel()
 
     def active(self):
@@ -326,22 +331,46 @@ class BulbSession:
     async def run(self):
         try:
             while not self.stopping:
+                self.operation_started = time.monotonic()
                 self.operation_task = asyncio.create_task(self.step())
                 try:
                     # Poll only the local lease while a slow BLE operation runs.
                     while not self.operation_task.done():
                         await asyncio.wait({self.operation_task},timeout=.05)
-                        if self.requested and not self.active() and not self.operation_task.done():
+                        if (self.requested and not self.active() and not self.operation_task.done()
+                                and not self.operation_task.cancelling()):
                             self.operation_task.cancel()
                     await self.operation_task
                 except asyncio.CancelledError:
-                    if self.active():
+                    # A renewed lease can arrive while the child is unwinding.
+                    # Only cancellation of this worker itself should stop it.
+                    if asyncio.current_task().cancelling():
                         raise
-                    await self.release()
+                    if not self.active():
+                        await self.release()
+                    else:
+                        # The cancelled step may have connected without taking
+                        # its snapshot. Preserve the new demand, but reconnect
+                        # and authenticate/snapshot before sending any color.
+                        if self.transport is not None:
+                            try:
+                                await self.transport.disconnect()
+                            finally:
+                                self.transport = None
+                        self.initialized = False
                 finally:
-                    self.operation_task = None
+                    if self.operation_task.done():
+                        self.operation_task = None
+                        self.operation_started = None
                 await asyncio.sleep(.02)
         finally:
+            self.stopping = True
+            if self.operation_task is not None and not self.operation_task.done():
+                if not self.operation_task.cancelling():
+                    self.operation_task.cancel()
+                await asyncio.gather(self.operation_task, return_exceptions=True)
+            self.operation_task = None
+            self.operation_started = None
             await self.release()
 
 class Bridge:
@@ -362,9 +391,45 @@ class Bridge:
             self.sessions[device['device']] = families[profile.family](device, profile)
         self.token = token
         self.tasks = []
+        self.worker_tasks = {}
+        self.closing = False
 
     def start(self):
-        self.tasks = [asyncio.create_task(s.run()) for s in self.sessions.values()]
+        if self.tasks:
+            raise RuntimeError('BLE workers already started')
+        self.worker_tasks = {identity: asyncio.create_task(s.run())
+                             for identity, s in self.sessions.items()}
+        self.tasks = list(self.worker_tasks.values())
+
+    def worker_status(self, session, now=None):
+        task = self.worker_tasks.get(session.device['device'])
+        error = None
+        if task is not None and task.done() and not self.closing:
+            if task.cancelled():
+                error = 'Worker cancelled unexpectedly'
+            else:
+                exception = task.exception()  # Retrieve it instead of hiding a dead task.
+                error = 'Worker exited unexpectedly' + (': ' + type(exception).__name__ if exception else '')
+        started = session.operation_started
+        age = 0 if started is None else max(0, (time.monotonic() if now is None else now) - started)
+        if task is not None and not task.done() and age > 30 and not self.closing:
+            error = 'BLE operation exceeded 30 seconds'
+        return {'worker_alive': task is not None and not task.done(),
+                'worker_error': error, 'operation_age_ms': round(age * 1000)}
+
+    def check_workers(self):
+        if self.closing:
+            return
+        for index, session in enumerate(self.sessions.values()):
+            status = self.worker_status(session)
+            if status['worker_error']:
+                # Close this companion so the existing Windows supervisor can
+                # restart it. A live UDP port alone must not hide a dead worker.
+                session.error = status['worker_error']
+                session.state = 'failed'
+                print(json.dumps({'event': 'ble-worker-unhealthy', 'index': index,
+                                  'error': status['worker_error']}), flush=True)
+                raise RuntimeError(status['worker_error'])
 
     def selected(self, message):
         ids = message.get('devices', list(self.sessions))
@@ -466,12 +531,18 @@ class Bridge:
         else:
             raise ValueError('Unsupported op')
         states = [s.status() for s in selected]
+        for session, state in zip(selected, states):
+            health = self.worker_status(session)
+            state.update(health)
+            if health['worker_error']:
+                state.update(ready=False, error=health['worker_error'])
         if op == 'status' and message.get('metrics') is True:
             for session,state in zip(selected,states):
                 state['frame_history'] = list(session.frame_history)
         return {'id':message.get('id'), 'ok':True, 'devices':states}
 
     async def close(self):
+        self.closing = True
         for session in self.sessions.values():
             session.stopping = True
             if session.transport is not None or not session.released.is_set():
@@ -594,6 +665,7 @@ async def serve(config,key,interval,lease,seconds=None,stop_file=None):
         reopen_times = deque()
         while (seconds is None or time.monotonic()-started<seconds) and (stop_file is None or not Path(stop_file).exists()):
             await asyncio.sleep(.1)
+            bridge.check_workers()
             if api.failed.is_set():
                 await close_udp_endpoint(transport, api)
                 while True:
